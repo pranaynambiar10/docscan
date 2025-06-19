@@ -73,6 +73,7 @@ The backend will start on `http://localhost:5000`
 │   ├── gemini_service.py   # Gemini AI integration
 │   └── requirements.txt    # Python dependencies
 └── README.md
+    .env
 ```
 
 ## Troubleshooting
