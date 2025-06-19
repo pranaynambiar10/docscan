@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Document Assistant</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Document Assistant</h1>
+            <p>Upload a document and ask questions about it</p>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <h2>Upload Document</h2>
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-content">
+                        <p>Drag and drop your file here or click to browse</p>
+                        <input type="file" id="fileInput" accept=".pdf,.txt,.doc,.docx,.jpg,.jpeg,.png" hidden>
+                        <button type="button" onclick="document.getElementById('fileInput').click()">
+                            Choose File
+                        </button>
+                    </div>
+                </div>
+                <div id="fileInfo" class="file-info" style="display: none;">
+                    <p id="fileName"></p>
+                    <button onclick="removeFile()">Remove File</button>
+                </div>
+            </div>
+
+            <div class="chat-section">
+                <h2>Ask Questions</h2>
+                <div class="chat-container" id="chatContainer">
+                    <div class="messages" id="messages">
+                        <div class="message bot-message">
+                            <strong>AI:</strong> Upload a document to start asking questions about it.
+                        </div>
+                    </div>
+                    <div class="input-area">
+                        <input type="text" id="messageInput" placeholder="Ask a question about your document..." disabled>
+                        <button onclick="sendMessage()" id="sendBtn" disabled>Send</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
