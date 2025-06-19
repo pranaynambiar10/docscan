@@ -31,7 +31,8 @@ A simple AI-powered document analysis platform that allows users to upload docum
    - Copy the API key
 
 5. **Configure API Key**:
-   - Open `backend/app.py`
+   - create a .env file in main folder
+   - write "GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE"
    - Replace `YOUR_GEMINI_API_KEY_HERE` with your actual API key
 
 6. **Run the backend**:
