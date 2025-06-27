@@ -1,13 +1,14 @@
-
 import os
 import PyPDF2
 import docx
 from PIL import Image
 import io
+from paddleocr import PaddleOCR
 
 class FileProcessor:
     def __init__(self, upload_folder):
         self.upload_folder = upload_folder
+        self.ocr = PaddleOCR(lang='en')  
     
     def process_file(self, file):
         """Process uploaded file and extract text content"""
@@ -15,10 +16,8 @@ class FileProcessor:
             filename = file.filename
             filepath = os.path.join(self.upload_folder, filename)
             
-            # Save the file
             file.save(filepath)
             
-            # Extract text based on file type
             content = ""
             file_extension = filename.lower().split('.')[-1]
             
@@ -88,6 +87,24 @@ class FileProcessor:
         return text
     
     def _extract_image_text(self, filepath):
-        """Extract text from image using basic OCR (placeholder)"""
-       
-        return f"Image file uploaded: {os.path.basename(filepath)}. Image OCR processing would require additional setup with pytesseract."
+        try:
+            print(f"Processing file: {filepath}")
+            print(f"File exists: {os.path.exists(filepath)}")
+            result = self.ocr.ocr(filepath)
+            print(f"PaddleOCR result: {result}")
+            text = ""
+            if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
+                rec_texts = result[0].get('rec_texts', [])
+                text = "\n".join([t for t in rec_texts if t.strip()])
+            else:
+                for line in result:
+                    for word_info in line:
+                        if len(word_info) > 1 and isinstance(word_info[1], (list, tuple)):
+                            text_piece = word_info[1][0]
+                            if isinstance(text_piece, str):
+                                text += text_piece + "\n"
+            print(f"Extracted text: {text}")
+            return text
+        except Exception as e:
+            print(f"PaddleOCR extraction error: {e}")
+            return f"Error extracting text from image: {e}"

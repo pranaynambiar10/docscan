@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 import google.generativeai as genai
 from file_processor import FileProcessor
-from gemini_service import GeminiService
+from AI_service import AIService
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -23,7 +23,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Initialize services
 file_processor = FileProcessor(UPLOAD_FOLDER)
-gemini_service = GeminiService()
+ai_service = AIService()
 
 def init_database():
     """Initialize SQLite database"""
@@ -113,7 +113,7 @@ def chat():
         document_content = result[0]
 
         # Get AI response
-        response = gemini_service.get_response(message, document_content, filename)
+        response = ai_service.get_response(message, document_content, filename)
 
         return jsonify({'response': response})
 

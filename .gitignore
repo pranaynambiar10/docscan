@@ -1,0 +1,100 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment
+.env
+.env.*
+
+# Database
+*.db
+*.sqlite3
+
+# Flask
+instance/
+.webassets-cache
+
+# React/Node
+node_modules/
+build/
+dist/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+
+# Backend uploads (comment out if you want to keep sample files)
+backend/uploads/
+
+# Misc
+*.swp
+*.swo
+
+# Git
+.git/
+
+# Node modules
+node_modules/
+frontend/node_modules/
+backend/venv/
+
+# Build output
+dist/
+build/
+frontend/dist/
+frontend/build/
+
+# Environment variables
+.env
+.env.*
+frontend/.env
+backend/.env
+
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Misc
+*.local
+*.cache
+
+# Bun lockfile (if not using Bun)
+frontend/bun.lockb
+
+# Coverage
+coverage/
+
+# Optional: Ignore test output
+*.test-results
+
+# Optional: Ignore static analysis output
+.eslintcache
+
+# SQLite DB
+backend/documents.db 
