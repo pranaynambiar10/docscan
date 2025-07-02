@@ -3,7 +3,6 @@ from flask_cors import CORS
 import os
 import sqlite3
 from datetime import datetime
-import google.generativeai as genai
 from file_processor import FileProcessor
 from AI_service import AIService
 from dotenv import load_dotenv
@@ -127,15 +126,7 @@ def health_check():
     return jsonify({'status': 'healthy'})
 
 if __name__ == '__main__':
-    # Get Gemini API key from environment variable
-    GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-    
-    if not GEMINI_API_KEY:
-        print("⚠️  Please set your Gemini API key in the .env file")
-        print("   Get your API key from: https://makersuite.google.com/app/apikey")
-        print("   Create a .env file with: GEMINI_API_KEY=your_api_key_here")
-    else:
-        genai.configure(api_key=GEMINI_API_KEY)
+   
     
     init_database()
     print("🚀 Server starting on http://localhost:5000")

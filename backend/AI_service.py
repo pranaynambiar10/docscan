@@ -53,7 +53,7 @@ class AIService:
 You are an AI assistant helping users understand documents. 
 
 Document Name: {filename}
-Content: {document_content[:600000]}...
+Content: {document_content[:600000000]}...
 
 User Question: {question}
 
@@ -68,7 +68,7 @@ Answer:
 Please analyze this document and provide a brief summary:
 
 Document Name: {filename}
-Content: {document_content[:600000]}...
+Content: {document_content[:600000000]}...
 
 Please provide:
 1. What type of document this appears to be

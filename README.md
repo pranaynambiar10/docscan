@@ -1,100 +1,125 @@
-# Invoice Project (docscan)
 
-A full-stack application for intelligent document (invoice, image, docx) upload, OCR, and Q&A using a local LLM.
+# DocScan - AI-Powered Document OCR and Q&A (with Ollama)
+
+DocScan is a full-stack application that lets users upload documents (PDFs, images, DOCX), extract text using OCR, and ask questions about the content using a local large language model (LLM) powered by Ollama (LLaMA 3.2).
+                                                Developers
+                               Pranay Nambiar(CUSAT)    Noor Muhammad KP(CUSAT)
+---
+
+Features:
+- Upload PDF, image, or Word documents
+- Automatically extract text using PyMuPDF, PaddleOCR, and python-docx
+- Ask intelligent questions using a local LLM (LLaMA 3.2)
+- Store and manage documents using SQLite
+- React and Tailwind CSS-based modern UI
 
 ---
 
-## Features
-- Upload PDF, image, or docx files
-- Automatic text extraction (PyMuPDF, PaddleOCR, python-docx)
-- Store and manage documents in SQLite
-- Ask questions about uploaded documents using a local LLM (e.g., llama.cpp, Ollama)
-- Modern React/TypeScript frontend with Tailwind CSS
+Tech Stack:
+- Frontend: React, TypeScript, Tailwind CSS, Vite
+- Backend: Python, Flask, SQLite, OCR (PaddleOCR, PyMuPDF, python-docx)
+- LLM: Ollama with LLaMA 3.2
 
 ---
 
-## Tech Stack
-- **Backend:** Python, Flask, SQLite, PaddleOCR, PyMuPDF, python-docx
-- **Frontend:** React, TypeScript, Tailwind CSS, Vite
-- **AI:** Local LLM (llama.cpp, Ollama, etc.)
+Setup Instructions:
 
----
+1. Clone the repository:
 
-## Setup Instructions
+```
 
-### 1. Clone the repository
-```bash
 git clone <your-repo-url>
 cd invoice
+
 ```
 
-### 2. Backend Setup
-```bash
-cd backend
+2. Create and activate a Python virtual environment:
+
+```
+
 python -m venv venv
-venv\Scripts\activate  # On Windows
-# or
-source venv/bin/activate  # On Mac/Linux
+
+# On Windows
+
+venv\Scripts\activate
+
+# On macOS/Linux
+
+source venv/bin/activate
+
+```
+
+3. Install backend dependencies:
+
+```
+
 pip install -r requirements.txt
-```
 
-- Create a `.env` file for environment variables (if needed).
-- The backend will auto-create `uploads/` and `documents.db` if missing.
+````
 
-#### Run the backend:
-```bash
+4. Set up Ollama and download the LLaMA 3.2 model:
+
+- Install Ollama from https://ollama.com/
+- Open a terminal and run:
+  ```
+  ollama pull llama3.2
+  ollama serve
+  ```
+
+5. Start the backend:
+
+````
+
+cd backend
 python app.py
+
 ```
 
-### 3. Frontend Setup
-```bash
+6. Start the frontend:
+
+```
+
 cd ../frontend
 npm install
 npm run dev
+
 ```
 
----
-
-## Environment Variables
-- Place any required API keys or settings in a `.env` file in the backend directory.
-- Example:
-  ```
-  GEMINI_API_KEY=your_key_here  # Only if using Gemini, otherwise ignore
-  ```
+Open your browser at `http://localhost:5173`.
 
 ---
 
-## Usage
-- Visit `http://localhost:5173` (or the port shown) for the frontend.
-- Upload a document, view extracted text, and ask questions about its content.
+How to Use:
+- Upload a document (invoice, receipt, etc.)
+- The app will extract and display the text
+- Ask questions like "What is the total amount?" or "Who is the sender?"
+- The AI will respond based on the extracted document content
 
 ---
 
-## Project Structure
+Project Structure:
+
 ```
+
 invoice/
-  backend/
-    app.py
-    AI_service.py
-    file_processor.py
-    requirements.txt
-    uploads/
-    documents.db
-  frontend/
-    src/
-    public/
-    package.json
-    ...
+backend/
+app.py
+AI\_service.py
+file\_processor.py
+requirements.txt
+uploads/
+documents.db
+frontend/
+src/
+public/
+package.json
+...
+
 ```
 
 ---
 
-## Contribution Guidelines
-- Fork the repo and create a feature branch
-- Commit descriptive messages
-- Open a pull request for review
+License: MIT
+```
 
 ---
-
-## License
-MIT 
