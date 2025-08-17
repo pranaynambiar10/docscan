@@ -3,8 +3,8 @@ import json
 
 class AIService:
     def __init__(self):
-        self.ollama_url = "http://localhost:11434/api/generate"
-        self.model = "llama3.2:latest"
+        self.ollama_url = "http://ollama:11434/api/generate"
+        self.model = "llama3.2:3b"
 
     def _query_ollama(self, prompt):
         try:
