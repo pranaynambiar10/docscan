@@ -15,23 +15,27 @@ class FileProcessor:
         """Initialize PaddleOCR with robust error handling for server environments"""
         try:
             print("Initializing PaddleOCR...")
-            # Initialize with minimal configuration for better compatibility
+            # Try with minimal configuration first
             ocr = PaddleOCR(
-                lang='en', 
-                use_gpu=False,  # Force CPU mode
+                lang='en',
                 show_log=False,
                 use_angle_cls=False,  # Disable angle classification for stability
-                det_model_dir=None,
-                rec_model_dir=None,
-                cls_model_dir=None,
                 drop_score=0.5  # Lower threshold for better text detection
             )
             print("PaddleOCR initialized successfully")
             return ocr
         except Exception as e:
-            print(f"Failed to initialize PaddleOCR: {e}")
-            # Return None instead of string to handle gracefully
-            return None  
+            print(f"Failed to initialize PaddleOCR with custom config: {e}")
+            
+            # Fallback: try with absolute minimal configuration
+            try:
+                print("Trying fallback OCR initialization...")
+                ocr = PaddleOCR(lang='en')  # Most basic initialization
+                print("PaddleOCR fallback initialization successful")
+                return ocr
+            except Exception as fallback_error:
+                print(f"Fallback OCR initialization also failed: {fallback_error}")
+                return None  
     
     def process_file(self, file):
         """Process uploaded file and extract text content"""
@@ -128,7 +132,7 @@ class FileProcessor:
                 
             # Process the image with error handling
             try:
-                result = self.ocr.ocr(filepath, cls=False)  # Disable classification for stability
+                result = self.ocr.ocr(filepath)  # Use default parameters for stability
                 print(f"PaddleOCR result: {result}")
             except Exception as ocr_error:
                 print(f"OCR processing error: {ocr_error}")
