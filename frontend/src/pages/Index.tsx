@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 import HealthCheck from '@/components/HealthCheck';
 
-const API_BASE_URL = 'http://localhost:5000';
+const API_BASE_URL = 'http://172.16.1.29:5000';
 
 interface Message {
   id: string;
