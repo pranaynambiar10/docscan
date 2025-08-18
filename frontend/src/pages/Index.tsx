@@ -4,7 +4,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
-import HealthCheck from '@/components/HealthCheck';
 
 const API_BASE_URL = 'http://172.16.1.29:5000';
 
@@ -246,7 +245,6 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-      <HealthCheck />
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <Card className="mb-8">
