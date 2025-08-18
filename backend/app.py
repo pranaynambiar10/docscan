@@ -125,18 +125,6 @@ def health_check():
     """Health check endpoint"""
     return jsonify({'status': 'healthy'})
 
-@app.route('/ocr-status', methods=['GET'])
-def ocr_status():
-    """Check OCR service status"""
-    try:
-        status = file_processor.test_ocr_status()
-        return jsonify(status)
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': f'OCR status check failed: {str(e)}'
-        }), 500
-
 if __name__ == '__main__':
     init_database()
     print("🚀 Server starting on http://0.0.0.0:5000")
