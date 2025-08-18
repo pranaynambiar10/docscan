@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
 
-const API_BASE_URL = 'http://localhost:5000';
+const API_BASE_URL = 'http://172.16.1.29:5000';
 
 const HealthCheck = () => {
   const [status, setStatus] = useState<'checking' | 'healthy' | 'error'>('checking');
