@@ -5,6 +5,7 @@ services:
       - "11434:11434"
     volumes:
       - ./ollama:/root/.ollama
+    restart: unless-stopped
   backend:
     build:
       context: .
@@ -17,6 +18,13 @@ services:
       - FLASK_ENV=development
     depends_on:
       - ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
 
   frontend:
     build:
@@ -29,3 +37,4 @@ services:
       - /app/node_modules
     depends_on:
       - backend
+    restart: unless-stopped

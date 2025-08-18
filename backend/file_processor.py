@@ -8,7 +8,27 @@ from paddleocr import PaddleOCR
 class FileProcessor:
     def __init__(self, upload_folder):
         self.upload_folder = upload_folder
-        self.ocr = PaddleOCR(lang='en')  
+        self.ocr = None  # Lazy initialization
+        
+    def _initialize_ocr(self):
+        """Initialize PaddleOCR with proper error handling"""
+        if self.ocr is None:
+            try:
+                # Force CPU mode to avoid GPU context issues
+                self.ocr = PaddleOCR(
+                    lang='en', 
+                    use_gpu=False,  # Force CPU mode for stability
+                    show_log=False,  # Reduce logging
+                    use_angle_cls=True,
+                    det_model_dir=None,  # Use default models
+                    rec_model_dir=None,
+                    cls_model_dir=None
+                )
+                print("PaddleOCR initialized successfully")
+            except Exception as e:
+                print(f"Failed to initialize PaddleOCR: {e}")
+                self.ocr = "failed"  # Mark as failed
+        return self.ocr != "failed"  
     
     def process_file(self, file):
         """Process uploaded file and extract text content"""
@@ -87,24 +107,39 @@ class FileProcessor:
         return text
     
     def _extract_image_text(self, filepath):
+        """Extract text from image using PaddleOCR with session independence"""
         try:
-            print(f"Processing file: {filepath}")
-            print(f"File exists: {os.path.exists(filepath)}")
-            result = self.ocr.ocr(filepath)
-            print(f"PaddleOCR result: {result}")
+            print(f"Processing image file: {filepath}")
+            
+            # Initialize OCR if needed
+            if not self._initialize_ocr():
+                return "OCR service is not available. Please try again later."
+            
+            # Process the image
+            result = self.ocr.ocr(filepath, cls=True)
+            print(f"PaddleOCR result type: {type(result)}")
+            
             text = ""
-            if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
-                rec_texts = result[0].get('rec_texts', [])
-                text = "\n".join([t for t in rec_texts if t.strip()])
-            else:
+            if result and isinstance(result, list) and len(result) > 0:
                 for line in result:
-                    for word_info in line:
-                        if len(word_info) > 1 and isinstance(word_info[1], (list, tuple)):
-                            text_piece = word_info[1][0]
-                            if isinstance(text_piece, str):
-                                text += text_piece + "\n"
-            print(f"Extracted text: {text}")
-            return text
+                    if line:  # Check if line is not None
+                        for word_info in line:
+                            if len(word_info) > 1 and isinstance(word_info[1], (list, tuple)):
+                                text_piece = word_info[1][0]
+                                confidence = word_info[1][1] if len(word_info[1]) > 1 else 1.0
+                                # Only include text with good confidence
+                                if isinstance(text_piece, str) and confidence > 0.6:
+                                    text += text_piece + " "
+            
+            if not text.strip():
+                return "No readable text found in this image."
+                
+            print(f"Successfully extracted {len(text)} characters")
+            return text.strip()
+            
         except Exception as e:
-            print(f"PaddleOCR extraction error: {e}")
-            return f"Error extracting text from image: {e}"
+            error_msg = f"Error processing image: {str(e)}"
+            print(error_msg)
+            # Reset OCR for next attempt
+            self.ocr = None
+            return error_msg
