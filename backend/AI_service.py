@@ -13,21 +13,19 @@ class AIService:
         self.model = self.deep_model  # Default compatibility alias
         self._wait_for_ollama()
 
-    def _wait_for_ollama(self, retries=5, delay=2):
-        """Wait for Ollama to be ready (non-blocking warning if not ready)"""
+    def _wait_for_ollama(self):
+        """Quick non-blocking check if Ollama is running"""
         base_url = self.ollama_url.replace("/api/generate", "")
-        for attempt in range(retries):
-            try:
-                r = requests.get(f"{base_url}/api/tags", timeout=3)
-                if r.status_code == 200:
-                    models = [m['name'] for m in r.json().get('models', [])]
-                    print(f"✅ Ollama ready. Available models: {models}")
-                    print(f"✅ Fast Model: {self.fast_model} | Deep Model: {self.deep_model}")
-                    return
-            except Exception:
-                pass
-            time.sleep(delay)
-        print("⚠️  Ollama is not running locally yet. Start Ollama to enable Q&A.")
+        try:
+            r = requests.get(f"{base_url}/api/tags", timeout=1)
+            if r.status_code == 200:
+                models = [m['name'] for m in r.json().get('models', [])]
+                print(f"✅ Ollama ready. Available models: {models}")
+                print(f"✅ Fast Model: {self.fast_model} | Deep Model: {self.deep_model}")
+                return
+        except Exception:
+            pass
+        print("💡 Ollama is not detected locally yet. (Start Ollama when you're ready to query the LLM).")
 
     def resolve_model(self, model_tier: str = "auto", chunk_count: int = 1) -> str:
         """

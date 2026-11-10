@@ -29,9 +29,11 @@ DATABASE = 'documents.db'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ── Initialize services (singletons — shared across all Gunicorn workers) ─────
+print("⏳ Initializing DocScan backend services...")
 file_processor = FileProcessor(UPLOAD_FOLDER)
 ai_service     = AIService()
 rag_engine     = RAGEngine()          # Local ChromaDB + sentence-transformers
+print("✅ All backend services ready!")
 
 # ── Optimized SQLite: thread-local connections + WAL mode ─────────────────────
 _db_local = threading.local()
