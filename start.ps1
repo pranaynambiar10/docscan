@@ -1,4 +1,4 @@
-﻿# ==============================================================================
+# ==============================================================================
 # DocScan — Windows PowerShell 1-Click Launcher
 # Usage: .\start or .\start.ps1
 # ==============================================================================
@@ -40,3 +40,4 @@ Write-Host "🌐 Opening DocScan in browser: http://localhost:8080" -ForegroundC
 Write-Host "========================================================" -ForegroundColor Green
 
 Start-Process "http://localhost:8080"
+
