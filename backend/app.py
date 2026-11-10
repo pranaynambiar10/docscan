@@ -1,3 +1,9 @@
+# Windows compatibility: Pre-load PyTorch DLLs before PaddlePaddle loads its C runtime
+try:
+    import torch
+except ImportError:
+    pass
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os

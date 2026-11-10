@@ -1,3 +1,9 @@
+# Pre-load PyTorch before PaddleOCR to prevent Windows C++ DLL conflicts
+try:
+    import torch
+except ImportError:
+    pass
+
 import os
 import hashlib
 import docx
@@ -28,15 +34,12 @@ except Exception:
 class FileProcessor:
     def __init__(self, upload_folder):
         self.upload_folder = upload_folder
-        # enable_mkldnn=True gives ~2x speedup on Intel CPUs (SIMD acceleration)
-        self.ocr = PaddleOCR(
-            lang='en',
-            use_gpu=_USE_GPU,
-            use_angle_cls=True,
-            show_log=False,
-            enable_mkldnn=not _USE_GPU,  # MKL-DNN only beneficial on CPU
-        )
-        print(f"✅ PaddleOCR initialized — GPU: {_USE_GPU}, MKL-DNN: {not _USE_GPU}")
+        try:
+            self.ocr = PaddleOCR(lang='en')
+        except Exception as e:
+            print(f"⚠️ PaddleOCR default init fallback: {e}")
+            self.ocr = PaddleOCR()
+        print("✅ PaddleOCR initialized")
         print(f"✅ PDF backend: {'PyMuPDF (fast)' if PYMUPDF_AVAILABLE else 'PyPDF2 (fallback)'}")
 
     # ------------------------------------------------------------------
