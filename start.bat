@@ -36,3 +36,4 @@ echo  All services started!
 echo  Opening DocScan in browser: http://localhost:8080
 echo ========================================================
 start http://localhost:8080
+

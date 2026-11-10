@@ -80,3 +80,4 @@ echo -e "${BOLD}${GREEN}🎉 DocScan is up and running in 1 step!${NC}"
 echo -e "  🌐 Frontend:  http://localhost:8080"
 echo -e "  ⚙️  Backend:   http://localhost:5000"
 echo -e "${BOLD}${GREEN}============================================================${NC}"
+
