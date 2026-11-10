@@ -1,10 +1,31 @@
 services:
+
+  # ── Ollama LLM Server ─────────────────────────────────────────────────────
   ollama:
     image: ollama/ollama
     ports:
       - "11434:11434"
     volumes:
-      - ./ollama:/root/.ollama
+      - ./ollama:/root/.ollama       # Persist downloaded models across restarts
+    # Auto-pull the configured model on startup so the first request never hangs
+    entrypoint: >
+      sh -c "ollama serve &
+             sleep 5 &&
+             ollama pull ${OLLAMA_MODEL:-qwen2.5:3b} &&
+             wait"
+    environment:
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+    restart: unless-stopped
+    # Uncomment below if your Linux server has an NVIDIA GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ── Backend (Flask + Gunicorn) ────────────────────────────────────────────
   backend:
     build:
       context: .
@@ -12,12 +33,25 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./backend:/app
+      - ./backend:/app               # Live code reload in dev
+      - ./chroma_db:/app/chroma_db   # Persist RAG vector index across restarts
+    env_file:
+      - .env                         # Loads OLLAMA_MODEL, GUNICORN_WORKERS, etc.
     environment:
-      - FLASK_ENV=development
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - OLLAMA_URL=http://ollama:11434/api/generate
+      - GUNICORN_WORKERS=${GUNICORN_WORKERS:-4}
     depends_on:
       - ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
+  # ── Frontend (React + Vite) ───────────────────────────────────────────────
   frontend:
     build:
       context: .
@@ -27,5 +61,8 @@ services:
     volumes:
       - ./frontend:/app
       - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:5000
     depends_on:
       - backend
+    restart: unless-stopped

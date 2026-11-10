@@ -9,3 +9,12 @@ python-dotenv==1.0.0
 paddleocr
 paddlepaddle
 setuptools
+
+# ── Performance optimizations ──────────────────────────────────────────────────
+pymupdf           # Fast C-backed PDF extraction (5-10x faster than PyPDF2)
+gunicorn          # Production WSGI server (multi-worker, replaces Flask dev server)
+gevent            # Async worker for gunicorn (handles concurrent requests efficiently)
+
+# ── RAG (Retrieval-Augmented Generation) ──────────────────────────────────────
+chromadb          # Local persistent vector store (no external server needed)
+sentence-transformers  # Local embedding model — all-MiniLM-L6-v2 (22MB, CPU-fast)

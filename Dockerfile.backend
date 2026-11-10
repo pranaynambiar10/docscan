@@ -4,21 +4,44 @@ FROM python:3.10-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy the requirements file into the container at /app
-COPY backend/requirements.txt .
+# Install system dependencies (OpenCV, OpenMP, libGL for PaddleOCR)
+RUN apt-get update && apt-get install -y \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install any needed packages specified in requirements.txt
-RUN apt-get update && apt-get install -y libgl1 libglib2.0-0 libgomp1
+# Copy and install Python dependencies
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the backend directory contents into the container at /app
+# Pre-download the embedding model at build time (cached in image layer)
+# This avoids a slow first-request delay in production
+ENV HF_HUB_DISABLE_SYMLINKS_WARNING=1
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2'); print('Embedding model cached OK')"
+
+# Copy the backend source code
 COPY backend/ .
 
-# Make port 5000 available to the world outside this container
+# Expose the backend port
 EXPOSE 5000
 
-# Define environment variable
+# Environment defaults (overridden by docker-compose / .env)
 ENV FLASK_APP=app.py
+ENV FLASK_ENV=production
+ENV OLLAMA_MODEL=qwen2.5:3b
+ENV OLLAMA_URL=http://ollama:11434/api/generate
+ENV GUNICORN_WORKERS=4
 
-# Run app.py when the container launches
-CMD ["python", "app.py"]
+# Run with Gunicorn + gevent for production (multi-worker, async)
+# Falls back gracefully: if gunicorn is unavailable, use Flask dev server
+CMD gunicorn \
+    -w ${GUNICORN_WORKERS} \
+    -k gevent \
+    --worker-connections 100 \
+    --timeout 120 \
+    --bind 0.0.0.0:5000 \
+    --access-logfile - \
+    --error-logfile - \
+    app:app

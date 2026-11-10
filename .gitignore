@@ -98,4 +98,17 @@ coverage/
 .eslintcache
 
 # SQLite DB
-backend/documents.db 
+backend/documents.db
+
+# RAG / ChromaDB vector index (auto-rebuilt on first run)
+backend/chroma_db/
+backend/chroma_db_test/
+
+# HuggingFace model cache (downloaded automatically)
+.cache/
+
+# Ollama downloaded models
+ollama/
+
+# Deploy artifacts
+*.log
