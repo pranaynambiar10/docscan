@@ -132,8 +132,9 @@ def chat():
         data = request.get_json()
         print("📨 Incoming chat request:", data)
 
-        message  = data.get('message')
-        filename = data.get('filename')
+        message    = data.get('message')
+        filename   = data.get('filename')
+        model_tier = data.get('model_tier') or data.get('tier', 'auto')
 
         if not message or not filename:
             return jsonify({'error': 'Message and filename required'}), 400
@@ -161,18 +162,21 @@ def chat():
             rag_engine.index_document(doc_id, content)
             rag_chunks = rag_engine.retrieve(doc_id, message)
 
-        # Step 3: Get AI response with retrieved chunks
-        response = ai_service.get_response(
+        # Step 3: Get AI response with retrieved chunks and adaptive model routing
+        response, model_used = ai_service.get_response(
             question=message,
             document_content="",   # Not needed — RAG chunks are used
             filename=filename,
             rag_chunks=rag_chunks,
+            model_tier=model_tier,
         )
 
         return jsonify({
             'response': response,
             'chunks_used': len(rag_chunks),
             'rag_enabled': True,
+            'model_used': model_used,
+            'model_tier': model_tier,
         })
 
     except Exception as e:
@@ -186,7 +190,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'rag': 'enabled',
-        'model': ai_service.model,
+        'deep_model': ai_service.deep_model,
+        'fast_model': ai_service.fast_model,
     })
 
 

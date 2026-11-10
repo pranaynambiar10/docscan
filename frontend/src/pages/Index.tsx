@@ -5,7 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 
-const API_BASE_URL = 'http://172.16.1.29:5000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || 
+  (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:5000` : 'http://localhost:5000');
 
 interface Message {
   id: string;
@@ -13,6 +14,7 @@ interface Message {
   sender: 'user' | 'bot';
   timestamp: Date;
   isLoading?: boolean;
+  modelUsed?: string;
 }
 
 interface UploadedFile {
@@ -34,6 +36,7 @@ const Index = () => {
   const [messageInput, setMessageInput] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isChatEnabled, setIsChatEnabled] = useState(false);
+  const [modelTier, setModelTier] = useState<'auto' | 'fast' | 'deep'>('auto');
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -200,7 +203,8 @@ const Index = () => {
         },
         body: JSON.stringify({
           message: message,
-          filename: uploadedFile.name
+          filename: uploadedFile.name,
+          model_tier: modelTier,
         })
       });
 
@@ -213,7 +217,8 @@ const Index = () => {
           id: Date.now().toString(),
           text: result.response,
           sender: 'bot',
-          timestamp: new Date()
+          timestamp: new Date(),
+          modelUsed: result.model_used
         };
         setMessages(prev => [...prev, botMessage]);
       } else {
@@ -324,11 +329,50 @@ const Index = () => {
 
           {/* Chat Section */}
           <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg">
                 <MessageCircle className="w-5 h-5" />
                 Ask Questions
               </CardTitle>
+              {/* Dual-Model Routing Selector */}
+              <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg text-xs">
+                <button
+                  type="button"
+                  onClick={() => setModelTier('auto')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+                    modelTier === 'auto'
+                      ? 'bg-white shadow text-blue-600 font-semibold'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  title="Auto: Small bills use 1.5B (<1s), large docs use 3B with RAG"
+                >
+                  🤖 Auto
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModelTier('fast')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+                    modelTier === 'fast'
+                      ? 'bg-white shadow text-green-600 font-semibold'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  title="Fast Mode: Uses qwen2.5:1.5b (<1 sec responses)"
+                >
+                  ⚡ Fast (1.5B)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModelTier('deep')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-all ${
+                    modelTier === 'deep'
+                      ? 'bg-white shadow text-purple-600 font-semibold'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                  title="Deep Analysis: Uses qwen2.5:3b for complex multi-page reasoning"
+                >
+                  🎯 Deep (3B)
+                </button>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="h-96 flex flex-col">
@@ -340,13 +384,20 @@ const Index = () => {
                       className={`mb-4 p-3 rounded-lg ${
                         message.sender === 'user'
                           ? 'bg-blue-500 text-white ml-auto max-w-[80%]'
-                          : 'bg-white text-gray-800 mr-auto max-w-[80%]'
+                          : 'bg-white text-gray-800 mr-auto max-w-[80%] shadow-sm'
                       } ${message.isLoading ? 'italic text-gray-600' : ''}`}
                     >
-                      <p className="font-semibold mb-1">
-                        {message.sender === 'user' ? 'You' : 'AI'}:
-                      </p>
-                      <p>{message.text}</p>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="font-semibold text-xs opacity-75">
+                          {message.sender === 'user' ? 'You' : 'AI'}
+                        </p>
+                        {message.modelUsed && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 font-mono">
+                            {message.modelUsed}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-sm whitespace-pre-wrap">{message.text}</p>
                     </div>
                   ))}
                 </div>

@@ -7,14 +7,16 @@ services:
       - "11434:11434"
     volumes:
       - ./ollama:/root/.ollama       # Persist downloaded models across restarts
-    # Auto-pull the configured model on startup so the first request never hangs
+    # Auto-pull models on startup: fast model (1.5b) + deep model (3b)
     entrypoint: >
       sh -c "ollama serve &
              sleep 5 &&
+             ollama pull ${OLLAMA_FAST_MODEL:-qwen2.5:1.5b} &&
              ollama pull ${OLLAMA_MODEL:-qwen2.5:3b} &&
              wait"
     environment:
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - OLLAMA_FAST_MODEL=${OLLAMA_FAST_MODEL:-qwen2.5:1.5b}
     restart: unless-stopped
     # Uncomment below if your Linux server has an NVIDIA GPU:
     # deploy:
@@ -40,6 +42,7 @@ services:
     environment:
       - FLASK_ENV=${FLASK_ENV:-production}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b}
+      - OLLAMA_FAST_MODEL=${OLLAMA_FAST_MODEL:-qwen2.5:1.5b}
       - OLLAMA_URL=http://ollama:11434/api/generate
       - GUNICORN_WORKERS=${GUNICORN_WORKERS:-4}
     depends_on:

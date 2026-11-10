@@ -6,46 +6,74 @@ import time
 
 class AIService:
     def __init__(self):
-        # Configurable via .env — no code change needed to switch models
+        # Configurable via .env — Dual-model adaptive routing
         self.ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
-        self.model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+        self.deep_model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")        # Deep analysis (large docs)
+        self.fast_model = os.getenv("OLLAMA_FAST_MODEL", "qwen2.5:1.5b") # High speed (small docs)
+        self.model = self.deep_model  # Default compatibility alias
         self._wait_for_ollama()
 
-    def _wait_for_ollama(self, retries=10, delay=3):
-        """Wait for Ollama to be ready (important on Docker startup)"""
+    def _wait_for_ollama(self, retries=5, delay=2):
+        """Wait for Ollama to be ready (non-blocking warning if not ready)"""
         base_url = self.ollama_url.replace("/api/generate", "")
         for attempt in range(retries):
             try:
-                r = requests.get(f"{base_url}/api/tags", timeout=5)
+                r = requests.get(f"{base_url}/api/tags", timeout=3)
                 if r.status_code == 200:
                     models = [m['name'] for m in r.json().get('models', [])]
                     print(f"✅ Ollama ready. Available models: {models}")
-                    print(f"✅ Using model: {self.model}")
+                    print(f"✅ Fast Model: {self.fast_model} | Deep Model: {self.deep_model}")
                     return
             except Exception:
                 pass
-            print(f"⏳ Waiting for Ollama... ({attempt + 1}/{retries})")
             time.sleep(delay)
-        print("⚠️  Ollama not reachable at startup — requests will fail until it's up")
+        print("⚠️  Ollama is not running locally yet. Start Ollama to enable Q&A.")
 
-    def _query_ollama(self, prompt: str) -> str:
-        """Query Ollama with optimized settings for speed"""
+    def resolve_model(self, model_tier: str = "auto", chunk_count: int = 1) -> str:
+        """
+        Adaptive Model Routing:
+        - Small docs (<= 3 chunks): automatically selects fast 1.5B model (<1s response)
+        - Large docs (> 3 chunks): automatically selects 3B deep reasoning model with RAG
+        - Explicit override: 'fast' or 'accurate'/'deep'
+        """
+        tier = (model_tier or "auto").lower()
+        if tier == "fast":
+            return self.fast_model
+        elif tier in ["accurate", "deep"]:
+            return self.deep_model
+        
+        # Auto mode: route based on document size / chunk count
+        if chunk_count <= 3:
+            print(f"⚡ Small document detected ({chunk_count} chunks) -> Auto-routed to {self.fast_model}")
+            return self.fast_model
+        else:
+            print(f"🎯 Large document detected ({chunk_count} chunks) -> Auto-routed to {self.deep_model}")
+            return self.deep_model
+
+    def _query_ollama(self, prompt: str, target_model: str = None) -> str:
+        """Query Ollama with model-specific optimized settings"""
+        selected_model = target_model or self.deep_model
+        is_fast = (selected_model == self.fast_model)
+
+        # Tune context & prediction limits based on model size
+        options = {
+            "num_ctx": 2048 if is_fast else 4096,
+            "num_predict": 256 if is_fast else 512,
+            "temperature": 0.1,
+            "top_p": 0.9,
+        }
+
         try:
             response = requests.post(
                 self.ollama_url,
                 json={
-                    "model": self.model,
+                    "model": selected_model,
                     "prompt": prompt,
                     "stream": True,
-                    "options": {
-                        "num_ctx": 4096,     # Limit context window (faster inference)
-                        "num_predict": 512,  # Cap output tokens
-                        "temperature": 0.1,  # Low temp = deterministic + faster
-                        "top_p": 0.9,
-                    }
+                    "options": options,
                 },
                 stream=True,
-                timeout=90,
+                timeout=60 if is_fast else 90,
             )
             response.raise_for_status()
             result = ""
@@ -57,20 +85,20 @@ class AIService:
         except requests.exceptions.Timeout:
             return "The AI took too long to respond. Please try again."
         except Exception as e:
-            print(f"Ollama API error: {e}")
-            return f"Ollama API error: {e}"
+            return f"Ollama connection error ({selected_model}): {e}. Make sure Ollama is running (`ollama serve`)."
 
     # ── RAG-powered Q&A ────────────────────────────────────────────────────────
 
     def get_response(self, question: str, document_content: str,
-                     filename: str, rag_chunks: list = None) -> str:
+                     filename: str, rag_chunks: list = None,
+                     model_tier: str = "auto") -> tuple:
         """
         Answer a question about a document.
-
-        If rag_chunks are provided (from RAG retrieval), only those semantically
-        relevant chunks are sent to the LLM — not the full document.
-        This gives much better accuracy on large bill/invoice PDFs.
+        Returns: (answer_string, model_used_name)
         """
+        chunk_count = len(rag_chunks) if rag_chunks else (1 if document_content else 0)
+        target_model = self.resolve_model(model_tier, chunk_count)
+
         if rag_chunks:
             # ── RAG mode: use semantically retrieved chunks ──────────────────
             context = "\n\n---\n\n".join(rag_chunks)
@@ -106,12 +134,15 @@ Answer concisely. If not in the excerpt, say so.
 
 Answer:"""
 
-        return self._query_ollama(prompt)
+        answer = self._query_ollama(prompt, target_model=target_model)
+        return answer, target_model
 
     def analyze_document(self, document_content: str, filename: str,
-                         rag_chunks: list = None) -> str:
+                         rag_chunks: list = None, model_tier: str = "auto") -> tuple:
         """Generate a structured summary of a document"""
-        # Use first few chunks for summary (most bills have header info at top)
+        chunk_count = len(rag_chunks) if rag_chunks else 1
+        target_model = self.resolve_model(model_tier, chunk_count)
+
         if rag_chunks:
             context = "\n\n".join(rag_chunks[:3])
         else:
@@ -131,7 +162,8 @@ Provide:
 5. Any action items or due dates
 
 Summary:"""
-        return self._query_ollama(prompt)
+        summary = self._query_ollama(prompt, target_model=target_model)
+        return summary, target_model
 
     # ── Fallback chunking (used when RAG index is not available) ──────────────
 
