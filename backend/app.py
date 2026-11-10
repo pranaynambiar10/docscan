@@ -231,15 +231,44 @@ def health_check():
 
 @app.route('/documents', methods=['GET'])
 def list_documents():
-    """List all indexed documents"""
+    """List all indexed documents (deduplicated by filename)"""
     conn = get_db()
-    rows = conn.execute(
-        'SELECT filename, chunk_count, upload_time FROM documents ORDER BY upload_time DESC'
-    ).fetchall()
+    rows = conn.execute('''
+        SELECT filename, MAX(chunk_count) as max_chunks, MAX(upload_time) as latest_time
+        FROM documents
+        GROUP BY filename
+        ORDER BY latest_time DESC
+    ''').fetchall()
     return jsonify([
         {'filename': r[0], 'chunk_count': r[1], 'upload_time': r[2]}
         for r in rows
     ])
+
+
+@app.route('/documents/<path:filename>', methods=['DELETE'])
+def delete_document(filename):
+    """Delete a document from SQLite and ChromaDB"""
+    try:
+        conn = get_db()
+        conn.execute('DELETE FROM documents WHERE filename = ?', (filename,))
+        conn.commit()
+
+        # Delete from ChromaDB vector collection
+        rag_engine.delete_document(filename)
+
+        # Optionally remove physical file
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except Exception:
+                pass
+
+        print(f"🗑️ Deleted document '{filename}' from database and vector index")
+        return jsonify({'message': f"Document '{filename}' deleted successfully"}), 200
+    except Exception as e:
+        print(f"❌ Delete error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
