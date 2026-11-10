@@ -69,34 +69,36 @@ Question     → embed question → cosine similarity search → top 5 chunks �
 
 ---
 
-## 🚀 Quick Start (Docker — Recommended)
+## 🚀 1-Step Quick Start & Deployment
 
-### Prerequisites
-- [Docker](https://docs.docker.com/get-docker/) + [Docker Compose](https://docs.docker.com/compose/)
-- 4 GB free RAM minimum (8 GB recommended)
-
-### 1. Clone & Configure
+### Option A: Linux Server (1-Step Launcher)
+Run on any Ubuntu/Debian/CentOS server:
 ```bash
 git clone https://github.com/pranaynambiar10/docscan.git
 cd docscan
-cp .env .env.local   # optional: customize model, workers, etc.
+chmod +x start-server.sh
+./start-server.sh
 ```
+* If Docker is installed: Automatically builds and launches Ollama, Flask Backend, and React Frontend in background containers.
+* If running natively: Automatically manages Ollama service, pulls `qwen2.5` models, starts Gunicorn on port 5000, and starts the Frontend on port 8080.
 
-### 2. Start Everything
+### Option B: Docker Compose (Direct)
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
-
 This automatically:
-- Starts **Ollama** and pulls `qwen2.5:3b` (~2 GB, one-time download)
-- Builds the **backend** with Gunicorn + RAG pipeline
-- Builds the **React frontend**
-- Wires everything together
+1. Starts **Ollama** and auto-pulls both models (`qwen2.5:1.5b` and `qwen2.5:3b`).
+2. Builds the **backend** (Flask + Gunicorn + PyMuPDF + PaddleOCR + ChromaDB).
+3. Builds the **frontend** and serves it on port `8080`.
 
-### 3. Open the App
+Open your browser at:
 ```
-http://localhost:5173
+http://<your-server-ip>:8080
 ```
+
+### Option C: Windows Local PC (1-Click)
+Simply double-click **`start.bat`** (or run `.\start.bat` in PowerShell/CMD).
+It starts Ollama, starts the Flask Backend, starts Vite Frontend, and automatically opens your browser to `http://localhost:8080`.
 
 ---
 
