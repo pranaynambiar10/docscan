@@ -13,6 +13,12 @@ Why this is better than sending full text:
 """
 
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+try:
+    import torch
+    torch.set_num_threads(2)
+except ImportError:
+    pass
 import hashlib
 from typing import List, Tuple
 
@@ -24,14 +30,21 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-EMBED_MODEL_NAME = os.getenv(
-    "EMBED_MODEL",
-    "all-MiniLM-L6-v2"       # 22 MB, fast on CPU, great for English docs
-    # Alternatives:
-    # "all-mpnet-base-v2"    # 420 MB, higher accuracy, slower
-    # "paraphrase-MiniLM-L3-v2"  # 17 MB, fastest, slightly lower accuracy
-)
-CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
+def _get_chroma_path():
+    path = os.getenv("CHROMA_DB_PATH", "./chroma_db")
+    abs_path = os.path.abspath(path)
+    # On Windows, if running inside OneDrive, redirect to local AppData to prevent OneDrive file sync locking SQLite
+    if "onedrive" in abs_path.lower():
+        local_dir = os.path.join(os.environ.get("LOCALAPPDATA", "C:/"), "docscan_chroma_db")
+        os.makedirs(local_dir, exist_ok=True)
+        return local_dir
+    return path
+
+CHROMA_DB_PATH = _get_chroma_path()
+EMBED_MODEL_NAME = os.getenv("EMBED_MODEL", "all-MiniLM-L6-v2")
 CHUNK_SIZE     = int(os.getenv("RAG_CHUNK_SIZE", "500"))   # chars per chunk
 CHUNK_OVERLAP  = int(os.getenv("RAG_CHUNK_OVERLAP", "100"))
 TOP_K          = int(os.getenv("RAG_TOP_K", "5"))          # chunks sent to LLM
@@ -45,8 +58,12 @@ class RAGEngine:
 
     def __init__(self):
         print(f"🔄 Loading embedding model: {EMBED_MODEL_NAME}")
-        self.embedder = SentenceTransformer(EMBED_MODEL_NAME)
-        dim = self.embedder.get_embedding_dimension()   # renamed from get_sentence_embedding_dimension
+        try:
+            # Ultra-fast local loading (0.2s) without making slow network requests to HuggingFace
+            self.embedder = SentenceTransformer(EMBED_MODEL_NAME, local_files_only=True)
+        except Exception:
+            self.embedder = SentenceTransformer(EMBED_MODEL_NAME)
+        dim = self.embedder.get_embedding_dimension()
         print(f"✅ Embedding model loaded ({dim}d vectors)")
 
         # Persistent ChromaDB — survives server restarts
@@ -66,10 +83,16 @@ class RAGEngine:
         Returns the number of chunks indexed.
         Call this once after text extraction during upload.
         """
-        chunks = self._chunk_text(text)
-        if not chunks:
+        if not text or not text.strip():
+            print(f"⚠️  No text content provided to index for doc: {doc_id}")
             return 0
 
+        chunks = self._chunk_text(text)
+        if not chunks:
+            print(f"⚠️  No chunks generated for doc: {doc_id}")
+            return 0
+
+        print(f"🧩 Split document '{doc_id}' into {len(chunks)} chunk(s). Storing in ChromaDB...")
         collection = self._get_or_create_collection(doc_id)
 
         # Embed all chunks in one batched call (much faster than one-by-one)
@@ -81,7 +104,8 @@ class RAGEngine:
         ).tolist()
 
         # Upsert into ChromaDB (safe to re-index same doc)
-        ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
+        col_safe_name = self._col_name(doc_id)
+        ids = [f"{col_safe_name}_chunk_{i}" for i in range(len(chunks))]
         collection.upsert(
             ids=ids,
             documents=chunks,
@@ -98,7 +122,7 @@ class RAGEngine:
         Returns a list of text chunks, ranked by relevance.
         """
         collection = self._get_collection(doc_id)
-        if collection is None:
+        if collection is None or collection.count() == 0:
             return []
 
         query_embedding = self.embedder.encode(
@@ -106,9 +130,13 @@ class RAGEngine:
             normalize_embeddings=True,
         ).tolist()
 
+        n_results = min(top_k, collection.count())
+        if n_results == 0:
+            return []
+
         results = collection.query(
             query_embeddings=query_embedding,
-            n_results=min(top_k, collection.count()),
+            n_results=n_results,
             include=["documents", "distances"],
         )
 
@@ -144,36 +172,58 @@ class RAGEngine:
     def _chunk_text(self, text: str) -> List[str]:
         """
         Split text into overlapping chunks.
-        Overlap ensures context isn't lost at chunk boundaries
-        (important for bill totals that span across lines).
+        Guaranteed to terminate and advance monotonically.
         """
+        text = text.strip()
+        if not text:
+            return []
+
+        # If document fits within one chunk, return directly
+        if len(text) <= CHUNK_SIZE:
+            return [text]
+
         chunks = []
         start = 0
-        text = text.strip()
-        while start < len(text):
-            end = min(start + CHUNK_SIZE, len(text))
+        text_len = len(text)
+
+        while start < text_len:
+            end = min(start + CHUNK_SIZE, text_len)
             # Try to break at a sentence/newline boundary for cleaner chunks
-            if end < len(text):
+            if end < text_len:
                 for sep in ['\n\n', '\n', '. ', ' ']:
                     boundary = text.rfind(sep, start + CHUNK_SIZE // 2, end)
                     if boundary != -1:
                         end = boundary + len(sep)
                         break
+
             chunk = text[start:end].strip()
             if chunk:
                 chunks.append(chunk)
-            start = end - CHUNK_OVERLAP
-            if start >= len(text):
+
+            if end >= text_len:
                 break
+
+            # Advance start: move by (end - CHUNK_OVERLAP), strictly guaranteeing progress
+            next_start = end - CHUNK_OVERLAP
+            if next_start <= start:
+                next_start = start + max(1, CHUNK_SIZE - CHUNK_OVERLAP)
+            start = next_start
+
         return chunks
 
     def _col_name(self, doc_id: str) -> str:
-        """ChromaDB collection name — sanitize to alphanumeric + underscores"""
-        safe = "".join(c if c.isalnum() else "_" for c in doc_id)
-        # ChromaDB requires 3-63 chars; hash long names
-        if len(safe) > 60:
-            safe = "doc_" + hashlib.md5(doc_id.encode()).hexdigest()[:56]
-        return safe or "default_collection"
+        """
+        ChromaDB collection name — must satisfy:
+        3-63 characters, start and end with an alphanumeric character,
+        and only contain [a-zA-Z0-9._-].
+        """
+        base = "".join(c if c.isalnum() else "_" for c in doc_id).strip("_")
+        if not base:
+            base = "doc"
+        col_prefix = f"doc_{base}"[:45]
+        suffix = hashlib.md5(doc_id.encode('utf-8')).hexdigest()[:8]
+        clean_name = f"{col_prefix}_{suffix}".strip("_")
+        return clean_name
 
     def _get_or_create_collection(self, doc_id: str):
         if doc_id not in self._collections:

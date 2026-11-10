@@ -103,36 +103,38 @@ const Index = () => {
         const result = await response.json();
         
         // Add success message
+        const chunkInfo = result.chunk_count ? ` (${result.chunk_count} vector chunks indexed for RAG)` : '';
         const successMessage: Message = {
           id: Date.now().toString(),
-          text: `Document "${file.name}" has been uploaded and processed. You can now ask questions about it!`,
+          text: `Document "${file.name}" has been uploaded and processed successfully${chunkInfo}. You can now ask questions!`,
           sender: 'bot',
           timestamp: new Date()
         };
         setMessages(prev => [...prev, successMessage]);
         
         setIsChatEnabled(true);
-        toast.success('Document uploaded successfully!');
+        toast.success('Document uploaded and indexed successfully!');
       } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Upload failed');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Upload failed with server error ${response.status}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Upload error:', error);
       
       // Remove loading message
       setMessages(prev => prev.filter(msg => !msg.isLoading));
       
-      // Add error message but keep file info
+      const errorMsg = error?.message || 'Error uploading file. Please try again.';
+      // Add informative error message
       const errorMessage: Message = {
         id: Date.now().toString(),
-        text: 'Error uploading file. Please try again.',
+        text: `Error uploading file: ${errorMsg}`,
         sender: 'bot',
         timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMessage]);
       
-      toast.error('Failed to upload document');
+      toast.error(`Upload failed: ${errorMsg}`);
     } finally {
       setIsUploading(false);
     }
@@ -222,23 +224,25 @@ const Index = () => {
         };
         setMessages(prev => [...prev, botMessage]);
       } else {
-        throw new Error('Failed to get response');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server returned error ${response.status}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Chat error:', error);
       
       // Remove loading message
       setMessages(prev => prev.filter(msg => !msg.isLoading));
       
+      const errorMsg = error?.message || 'Error getting response. Please try again.';
       const errorMessage: Message = {
         id: Date.now().toString(),
-        text: 'Error getting response. Please try again.',
+        text: `Error getting AI response: ${errorMsg}`,
         sender: 'bot',
         timestamp: new Date()
       };
       setMessages(prev => [...prev, errorMessage]);
       
-      toast.error('Failed to get AI response');
+      toast.error(`Chat error: ${errorMsg}`);
     }
   };
 

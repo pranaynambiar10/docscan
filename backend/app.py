@@ -1,6 +1,9 @@
-# Windows compatibility: Pre-load PyTorch DLLs before PaddlePaddle loads its C runtime
+import os
+# Prevent Intel OpenMP deadlock when PyTorch and PaddleOCR co-exist on Windows
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 try:
     import torch
+    torch.set_num_threads(2)
 except ImportError:
     pass
 
@@ -51,7 +54,7 @@ def get_db():
 
 
 def init_database():
-    """Initialize SQLite database schema"""
+    """Initialize SQLite database schema and migrate missing columns"""
     conn = get_db()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS documents (
@@ -67,7 +70,15 @@ def init_database():
         CREATE INDEX IF NOT EXISTS idx_documents_filename
         ON documents (filename, upload_time DESC)
     ''')
+    # Auto-migrate chunk_count column if older database exists
+    cursor = conn.execute("PRAGMA table_info(documents)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if 'chunk_count' not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN chunk_count INTEGER DEFAULT 0")
     conn.commit()
+
+# Always initialize database schema on startup
+init_database()
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -85,26 +96,37 @@ def upload_file():
     """
     try:
         if 'file' not in request.files:
-            return jsonify({'error': 'No file provided'}), 400
+            print("❌ [UPLOAD] Rejected: 'file' field missing from request.files")
+            return jsonify({'error': "No file provided in form data ('file' key missing)"}), 400
 
         file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'No file selected'}), 400
+        if not file or file.filename == '':
+            print("❌ [UPLOAD] Rejected: Empty filename")
+            return jsonify({'error': 'No file selected for upload'}), 400
 
-        # Step 1 & 2: Extract text
+        filename = file.filename
+        print(f"\n📥 [UPLOAD] Incoming upload request for file: '{filename}'")
+
+        # Step 1: Text extraction
+        print(f"⚙️ [UPLOAD] Step 1/3: Extracting text from '{filename}'...")
         result = file_processor.process_file(file)
 
         if not result['success']:
-            return jsonify({'error': result['error']}), 400
+            err_msg = result.get('error', 'Failed to extract text from document')
+            print(f"❌ [UPLOAD] Extraction failed: {err_msg}")
+            return jsonify({'error': err_msg}), 400
 
-        filename   = result['filename']
-        content    = result['content']
-        doc_id     = filename  # Use filename as doc identifier
+        content = result['content']
+        doc_id  = filename
+        print(f"📄 [UPLOAD] Step 1 complete. Extracted {len(content)} characters.")
 
-        # Step 3: Index into RAG (embed chunks → ChromaDB)
+        # Step 2: Index into ChromaDB (RAG)
+        print(f"🧠 [UPLOAD] Step 2/3: Chunking and indexing into ChromaDB (RAG)...")
         chunk_count = rag_engine.index_document(doc_id, content)
+        print(f"✅ [UPLOAD] Step 2 complete. Indexed {chunk_count} chunk(s).")
 
-        # Step 4: Persist metadata in SQLite
+        # Step 3: Persist metadata in SQLite
+        print(f"💾 [UPLOAD] Step 3/3: Saving document metadata to SQLite...")
         conn = get_db()
         conn.execute(
             '''INSERT INTO documents (filename, filepath, content, chunk_count)
@@ -112,17 +134,21 @@ def upload_file():
             (filename, result['filepath'], content, chunk_count)
         )
         conn.commit()
+        print(f"🎉 [UPLOAD] Successfully processed and indexed '{filename}'!\n")
 
         return jsonify({
-            'message': 'File uploaded, processed, and indexed successfully',
+            'message': f"Document '{filename}' uploaded and indexed successfully.",
             'filename': filename,
             'chunk_count': chunk_count,
             'rag_enabled': chunk_count > 0,
-        })
+            'characters_extracted': len(content)
+        }), 200
 
     except Exception as e:
-        print(f"Upload error: {str(e)}")
-        return jsonify({'error': 'Internal server error'}), 500
+        import traceback
+        traceback.print_exc()
+        print(f"❌ [UPLOAD] Exception during upload: {str(e)}")
+        return jsonify({'error': f"Internal server error: {str(e)}"}), 500
 
 
 @app.route('/chat', methods=['POST'])

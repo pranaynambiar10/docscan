@@ -1,10 +1,10 @@
-# Pre-load PyTorch before PaddleOCR to prevent Windows C++ DLL conflicts
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 try:
     import torch
+    torch.set_num_threads(2)
 except ImportError:
     pass
-
-import os
 import hashlib
 import docx
 from PIL import Image
@@ -54,11 +54,17 @@ class FileProcessor:
 
             file.save(filepath)
 
+            if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+                return {
+                    'success': False,
+                    'error': 'Uploaded file is empty (0 bytes).'
+                }
+
             # --- Deduplication: check hash before heavy OCR/extraction ---
             file_hash = self._get_file_hash(filepath)
             cached = self._check_hash_cache(file_hash)
-            if cached:
-                print(f"⚡ Cache hit for {filename} — skipping re-processing")
+            if cached and cached.strip():
+                print(f"⚡ Cache hit for {filename} — skipping re-processing ({len(cached)} chars)")
                 return {
                     'success': True,
                     'filename': filename,
@@ -67,7 +73,7 @@ class FileProcessor:
                 }
 
             content = ""
-            file_extension = filename.lower().split('.')[-1]
+            file_extension = filename.lower().split('.')[-1] if '.' in filename else ''
 
             if file_extension == 'pdf':
                 content = self._extract_pdf_text(filepath)
@@ -80,13 +86,13 @@ class FileProcessor:
             else:
                 return {
                     'success': False,
-                    'error': f'Unsupported file type: {file_extension}'
+                    'error': f'Unsupported file type: .{file_extension}. Supported formats: PDF, TXT, DOCX, JPG, PNG.'
                 }
 
-            if not content.strip():
+            if not content or not content.strip():
                 return {
                     'success': False,
-                    'error': 'Could not extract text from the file'
+                    'error': 'Could not extract text from the file. The file may be blank, corrupted, or contains no legible text.'
                 }
 
             # Save hash → content mapping for future duplicate uploads
@@ -116,22 +122,34 @@ class FileProcessor:
         return self._extract_pdf_pypdf2(filepath)
 
     def _extract_pdf_pymupdf(self, filepath):
-        """Fast C-backed PDF extraction with parallel page processing"""
+        """Fast C-backed PDF extraction with automatic OCR fallback for scanned PDFs"""
         text = ""
         try:
             doc = fitz.open(filepath)
             num_pages = len(doc)
+            pages_text = []
 
-            if num_pages <= 4:
-                # Small docs: sequential is fine
-                pages_text = [doc[i].get_text() for i in range(num_pages)]
-            else:
-                # Large docs: parallel page extraction (2-4x speedup)
-                def extract_page(page_num):
-                    return doc[page_num].get_text()
-
-                with ThreadPoolExecutor(max_workers=min(4, num_pages)) as executor:
-                    pages_text = list(executor.map(extract_page, range(num_pages)))
+            for i in range(num_pages):
+                page_text = doc[i].get_text()
+                if page_text.strip():
+                    pages_text.append(page_text)
+                else:
+                    # Page has no text layer (it's a scanned page/image) — run OCR on it!
+                    print(f"📷 Page {i+1} appears to be a scanned image, running OCR...")
+                    try:
+                        pix = doc[i].get_pixmap(dpi=150)
+                        temp_img = filepath + f"_page_{i}.png"
+                        pix.save(temp_img)
+                        ocr_text = self._extract_image_text(temp_img)
+                        if os.path.exists(temp_img):
+                            try:
+                                os.remove(temp_img)
+                            except Exception:
+                                pass
+                        if ocr_text and not ocr_text.startswith("Error"):
+                            pages_text.append(ocr_text)
+                    except Exception as ocr_err:
+                        print(f"OCR fallback error on page {i+1}: {ocr_err}")
 
             doc.close()
             text = "\n".join(pages_text)
@@ -175,24 +193,29 @@ class FileProcessor:
     def _extract_image_text(self, filepath):
         """Extract text from image using PaddleOCR (GPU-accelerated if available)"""
         try:
-            print(f"Processing image: {filepath}")
+            print(f"Processing image with PaddleOCR: {filepath}")
             result = self.ocr.ocr(filepath)
             text = ""
+            if not result:
+                return ""
             if isinstance(result, list) and len(result) > 0 and isinstance(result[0], dict):
                 rec_texts = result[0].get('rec_texts', [])
                 text = "\n".join([t for t in rec_texts if t.strip()])
             else:
                 for line in result:
+                    if not line:
+                        continue
                     for word_info in line:
                         if len(word_info) > 1 and isinstance(word_info[1], (list, tuple)):
                             text_piece = word_info[1][0]
                             if isinstance(text_piece, str):
                                 text += text_piece + "\n"
+            text = text.strip()
             print(f"Extracted {len(text)} chars from image")
             return text
         except Exception as e:
             print(f"PaddleOCR extraction error: {e}")
-            return f"Error extracting text from image: {e}"
+            return ""
 
     # ------------------------------------------------------------------
     # Hash-based deduplication cache (simple file-based)
