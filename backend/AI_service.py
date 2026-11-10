@@ -7,24 +7,39 @@ import time
 class AIService:
     def __init__(self):
         # Configurable via .env — Dual-model adaptive routing
-        self.ollama_url = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
+        configured_url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+        self.ollama_url = configured_url
         self.deep_model = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")        # Deep analysis (large docs)
         self.fast_model = os.getenv("OLLAMA_FAST_MODEL", "qwen2.5:1.5b") # High speed (small docs)
         self.model = self.deep_model  # Default compatibility alias
-        self._wait_for_ollama()
+        self._wait_for_ollama(configured_url)
 
-    def _wait_for_ollama(self):
-        """Quick non-blocking check if Ollama is running"""
-        base_url = self.ollama_url.replace("/api/generate", "")
-        try:
-            r = requests.get(f"{base_url}/api/tags", timeout=1)
-            if r.status_code == 200:
-                models = [m['name'] for m in r.json().get('models', [])]
-                print(f"✅ Ollama ready. Available models: {models}")
-                print(f"✅ Fast Model: {self.fast_model} | Deep Model: {self.deep_model}")
-                return
-        except Exception:
-            pass
+    def _wait_for_ollama(self, preferred_url: str):
+        """Auto-detect working Ollama URL (checks preferred, localhost, 127.0.0.1, or docker service)"""
+        candidates = [
+            preferred_url,
+            "http://localhost:11434/api/generate",
+            "http://127.0.0.1:11434/api/generate",
+            "http://ollama:11434/api/generate",
+        ]
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+
+        for url in unique_candidates:
+            base_url = url.replace("/api/generate", "")
+            try:
+                r = requests.get(f"{base_url}/api/tags", timeout=1)
+                if r.status_code == 200:
+                    self.ollama_url = url
+                    models = [m['name'] for m in r.json().get('models', [])]
+                    print(f"✅ Connected to Ollama at {base_url}!")
+                    print(f"   Available models: {models}")
+                    print(f"   Fast Model: {self.fast_model} | Deep Model: {self.deep_model}")
+                    return
+            except Exception:
+                pass
+
         print("💡 Ollama is not detected locally yet. (Start Ollama when you're ready to query the LLM).")
 
     def resolve_model(self, model_tier: str = "auto", chunk_count: int = 1) -> str:
@@ -71,7 +86,7 @@ class AIService:
                     "options": options,
                 },
                 stream=True,
-                timeout=60 if is_fast else 90,
+                timeout=120,
             )
             response.raise_for_status()
             result = ""
