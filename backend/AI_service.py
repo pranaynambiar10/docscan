@@ -52,7 +52,7 @@ class AIService:
         tier = (model_tier or "auto").lower()
         if tier == "fast":
             return self.fast_model
-        elif tier in ["accurate", "deep"]:
+        elif tier in ["accurate", "deep", "full", "fulldoc"]:
             return self.deep_model
         
         # Auto mode: route based on document size / chunk count
@@ -63,15 +63,25 @@ class AIService:
             print(f"🎯 Large document detected ({chunk_count} chunks) -> Auto-routed to {self.deep_model}")
             return self.deep_model
 
-    def _query_ollama(self, prompt: str, target_model: str = None) -> str:
+    def _query_ollama(self, prompt: str, target_model: str = None, is_full_doc: bool = False) -> str:
         """Query Ollama with model-specific optimized settings"""
         selected_model = target_model or self.deep_model
         is_fast = (selected_model == self.fast_model)
 
-        # Tune context & prediction limits based on model size
+        # Tune context & prediction limits based on model size and whether full doc is needed
+        if is_full_doc:
+            num_ctx = 16384  # Expanded context window for full-document ingestion
+            num_predict = 1024
+        elif is_fast:
+            num_ctx = 2048
+            num_predict = 256
+        else:
+            num_ctx = 4096
+            num_predict = 512
+
         options = {
-            "num_ctx": 2048 if is_fast else 4096,
-            "num_predict": 256 if is_fast else 512,
+            "num_ctx": num_ctx,
+            "num_predict": num_predict,
             "temperature": 0.1,
             "top_p": 0.9,
         }
@@ -86,7 +96,7 @@ class AIService:
                     "options": options,
                 },
                 stream=True,
-                timeout=120,
+                timeout=180,
             )
             response.raise_for_status()
             result = ""
@@ -96,24 +106,52 @@ class AIService:
                     result += data.get("response", "")
             return result if result else "No response from Ollama."
         except requests.exceptions.Timeout:
-            return "The AI took too long to respond. Please try again."
+            return "The AI took too long to respond. Please try again or query a specific section."
         except Exception as e:
             return f"Ollama connection error ({selected_model}): {e}. Make sure Ollama is running (`ollama serve`)."
 
-    # ── RAG-powered Q&A ────────────────────────────────────────────────────────
+    # ── RAG & Full-Document Q&A ───────────────────────────────────────────────
 
     def get_response(self, question: str, document_content: str,
                      filename: str, rag_chunks: list = None,
                      model_tier: str = "auto") -> tuple:
         """
         Answer a question about a document.
+        Supports both RAG top-K chunk retrieval and Full-Document analysis.
         Returns: (answer_string, model_used_name)
         """
+        tier = (model_tier or "auto").lower()
+
+        # ── 1. Full-Document Mode ─────────────────────────────────────────────
+        # If user explicitly requests full document or if RAG chunks are not used
+        if tier in ["full", "fulldoc"] and document_content:
+            target_model = self.deep_model
+            prompt = f"""You are an expert document analyst specializing in comprehensive document understanding, contracts, invoices, and reports.
+
+Document: {filename}
+
+--- FULL EXTRACTED DOCUMENT TEXT ---
+{document_content}
+--- END OF DOCUMENT TEXT ---
+
+User Question: {question}
+
+Instructions:
+- Analyze the entire document provided above to answer the user's question completely.
+- If the question asks for a section, summary, table, or complete details, extract and explain the entire relevant section thoroughly.
+- Quote exact figures, dates, names, amounts, and clauses where appropriate.
+- Be clear, accurate, and structured.
+
+Answer:"""
+            print(f"📜 Querying Ollama in Full Document Mode ({len(document_content)} chars)...")
+            answer = self._query_ollama(prompt, target_model=target_model, is_full_doc=True)
+            return answer, target_model
+
+        # ── 2. RAG Retrieval Mode ─────────────────────────────────────────────
         chunk_count = len(rag_chunks) if rag_chunks else (1 if document_content else 0)
         target_model = self.resolve_model(model_tier, chunk_count)
 
         if rag_chunks:
-            # ── RAG mode: use semantically retrieved chunks ──────────────────
             context = "\n\n---\n\n".join(rag_chunks)
             prompt = f"""You are an expert document analyst specializing in bills, invoices, and financial documents.
 
@@ -125,14 +163,16 @@ Relevant Sections (retrieved by semantic search):
 User Question: {question}
 
 Instructions:
-- Answer based ONLY on the retrieved sections above.
+- Answer based on the retrieved sections above.
 - For amounts/totals: quote the exact figure from the document.
-- If the answer is not in the retrieved sections, say: "This information was not found in the retrieved sections. Try rephrasing your question."
+- If the retrieved sections do not contain enough detail to fully answer the question, answer what you can and add: "(Note: For complete details across the entire document, switch to 📜 Full Doc mode)."
 - Be concise and precise.
 
 Answer:"""
+            answer = self._query_ollama(prompt, target_model=target_model, is_full_doc=False)
+            return answer, target_model
         else:
-            # ── Fallback mode: keyword-matched chunk (no RAG index yet) ─────
+            # ── Fallback mode: keyword-matched chunk ──────────────────────────
             chunks = self.chunk_document(document_content)
             relevant_chunk = self.find_relevant_chunk(chunks, question)
             prompt = f"""You are a document analyst. Answer based on the document excerpt below.
@@ -146,9 +186,8 @@ Question: {question}
 Answer concisely. If not in the excerpt, say so.
 
 Answer:"""
-
-        answer = self._query_ollama(prompt, target_model=target_model)
-        return answer, target_model
+            answer = self._query_ollama(prompt, target_model=target_model, is_full_doc=False)
+            return answer, target_model
 
     def analyze_document(self, document_content: str, filename: str,
                          rag_chunks: list = None, model_tier: str = "auto") -> tuple:

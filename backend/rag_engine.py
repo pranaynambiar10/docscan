@@ -77,9 +77,9 @@ class RAGEngine:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def index_document(self, doc_id: str, text: str) -> int:
+    def index_document(self, doc_id: str, text: str, sections: list = None) -> int:
         """
-        Chunk a document, embed each chunk, and store in ChromaDB.
+        Chunk a document, embed each chunk, and store in ChromaDB with section metadata.
         Returns the number of chunks indexed.
         Call this once after text extraction during upload.
         """
@@ -87,7 +87,33 @@ class RAGEngine:
             print(f"⚠️  No text content provided to index for doc: {doc_id}")
             return 0
 
-        chunks = self._chunk_text(text)
+        chunks = []
+        metadatas = []
+
+        if sections:
+            # Section-aware chunking: preserves section boundaries and attaches page/section metadata
+            global_chunk_idx = 0
+            for sec in sections:
+                sec_content = sec.get('content', '').strip()
+                if not sec_content:
+                    continue
+                sec_chunks = self._chunk_text(sec_content)
+                for sc in sec_chunks:
+                    chunks.append(sc)
+                    metadatas.append({
+                        "doc_id": doc_id,
+                        "chunk_index": global_chunk_idx,
+                        "section_id": str(sec.get("section_id", "")),
+                        "section_title": str(sec.get("section_title", "")),
+                        "parent_title": str(sec.get("parent_title", "")),
+                        "page_start": int(sec.get("page_start", 1)),
+                        "page_end": int(sec.get("page_end", 1)),
+                    })
+                    global_chunk_idx += 1
+        else:
+            chunks = self._chunk_text(text)
+            metadatas = [{"doc_id": doc_id, "chunk_index": i} for i in range(len(chunks))]
+
         if not chunks:
             print(f"⚠️  No chunks generated for doc: {doc_id}")
             return 0
@@ -95,7 +121,7 @@ class RAGEngine:
         print(f"🧩 Split document '{doc_id}' into {len(chunks)} chunk(s). Storing in ChromaDB...")
         collection = self._get_or_create_collection(doc_id)
 
-        # Embed all chunks in one batched call (much faster than one-by-one)
+        # Embed all chunks in one batched call
         embeddings = self.embedder.encode(
             chunks,
             batch_size=32,
@@ -103,23 +129,23 @@ class RAGEngine:
             normalize_embeddings=True,   # Cosine similarity via dot product
         ).tolist()
 
-        # Upsert into ChromaDB (safe to re-index same doc)
+        # Upsert into ChromaDB
         col_safe_name = self._col_name(doc_id)
         ids = [f"{col_safe_name}_chunk_{i}" for i in range(len(chunks))]
         collection.upsert(
             ids=ids,
             documents=chunks,
             embeddings=embeddings,
-            metadatas=[{"doc_id": doc_id, "chunk_index": i} for i in range(len(chunks))],
+            metadatas=metadatas,
         )
 
         print(f"✅ Indexed {len(chunks)} chunks for doc: {doc_id}")
         return len(chunks)
 
-    def retrieve(self, doc_id: str, question: str, top_k: int = TOP_K) -> List[str]:
+    def retrieve_with_metadata(self, doc_id: str, question: str, top_k: int = TOP_K) -> List[dict]:
         """
-        Semantically retrieve the top-K most relevant chunks for a question.
-        Returns a list of text chunks, ranked by relevance.
+        Semantically retrieve top-K most relevant chunks along with section metadata.
+        Returns list of dicts: {'text': str, 'similarity': float, 'section_id': str, ...}
         """
         collection = self._get_collection(doc_id)
         if collection is None or collection.count() == 0:
@@ -137,18 +163,38 @@ class RAGEngine:
         results = collection.query(
             query_embeddings=query_embedding,
             n_results=n_results,
-            include=["documents", "distances"],
+            include=["documents", "metadatas", "distances"],
         )
 
         chunks = results["documents"][0] if results["documents"] else []
+        metas = results["metadatas"][0] if results.get("metadatas") else []
         distances = results["distances"][0] if results["distances"] else []
 
-        # Log similarity scores for debugging
-        for chunk, dist in zip(chunks, distances):
-            score = 1 - dist  # Convert distance → similarity
-            print(f"  📎 Similarity {score:.3f}: {chunk[:80].strip()}…")
+        items = []
+        for i, (chunk, dist) in enumerate(zip(chunks, distances)):
+            score = 1 - dist
+            meta = metas[i] if i < len(metas) else {}
+            items.append({
+                "text": chunk,
+                "similarity": score,
+                "section_id": meta.get("section_id", ""),
+                "section_title": meta.get("section_title", ""),
+                "parent_title": meta.get("parent_title", ""),
+                "page_start": meta.get("page_start", 1),
+                "page_end": meta.get("page_end", 1),
+            })
+            sec_lbl = f" [{meta.get('section_title')}, P.{meta.get('page_start')}]" if meta.get('section_title') else ""
+            print(f"  📎 Similarity {score:.3f}{sec_lbl}: {chunk[:70].strip()}…")
 
-        return chunks
+        return items
+
+    def retrieve(self, doc_id: str, question: str, top_k: int = TOP_K) -> List[str]:
+        """
+        Semantically retrieve top-K most relevant chunks (backward-compatible).
+        Returns list of text strings.
+        """
+        items = self.retrieve_with_metadata(doc_id, question, top_k)
+        return [item["text"] for item in items]
 
     def document_indexed(self, doc_id: str) -> bool:
         """Check if a document has already been indexed"""

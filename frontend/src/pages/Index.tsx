@@ -1,12 +1,40 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, X, Send, FileText, MessageCircle, Trash2, Clock, CheckCircle2, RotateCcw, FolderOpen } from 'lucide-react';
+import { 
+  Upload, X, Send, FileText, MessageCircle, Trash2, CheckCircle2, 
+  RotateCcw, FolderOpen, Eye, Search, Copy, Check, ChevronDown, ChevronUp, FileSearch, Sparkles, BookOpen
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from 'sonner';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 
   (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}:5000` : 'http://localhost:5000');
+
+export interface MatchedSection {
+  section_id?: string;
+  section_title: string;
+  parent_title?: string;
+  page_range?: string;
+  full_text?: string;
+}
+
+export interface SectionMeta {
+  id: number;
+  section_id: string;
+  section_index: number;
+  section_title: string;
+  parent_title: string;
+  page_start: number;
+  page_end: number;
+  content_length: number;
+}
 
 interface Message {
   id: string;
@@ -15,6 +43,10 @@ interface Message {
   timestamp: string | Date;
   isLoading?: boolean;
   modelUsed?: string;
+  sources?: string[];
+  fullDocUsed?: boolean;
+  retrievalMode?: string;
+  matchedSection?: MatchedSection | null;
 }
 
 interface UploadedFile {
@@ -43,10 +75,30 @@ const Index = () => {
   const [messageInput, setMessageInput] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isChatEnabled, setIsChatEnabled] = useState(false);
-  const [modelTier, setModelTier] = useState<'auto' | 'fast' | 'deep'>('auto');
+  const [modelTier, setModelTier] = useState<'auto' | 'fast' | 'deep' | 'full'>('auto');
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Full Document Viewer State
+  const [isViewerOpen, setIsViewerOpen] = useState(false);
+  const [viewerFilename, setViewerFilename] = useState('');
+  const [viewerContent, setViewerContent] = useState('');
+  const [viewerLoading, setViewerLoading] = useState(false);
+  const [viewerSearch, setViewerSearch] = useState('');
+  const [hasCopied, setHasCopied] = useState(false);
+  const [expandedSources, setExpandedSources] = useState<{ [msgId: string]: boolean }>({});
+
+  // Full Section Viewer State
+  const [activeSectionModal, setActiveSectionModal] = useState<MatchedSection | null>(null);
+  const [hasCopiedSection, setHasCopiedSection] = useState(false);
+
+  // Sections Explorer State
+  const [isSectionsExplorerOpen, setIsSectionsExplorerOpen] = useState(false);
+  const [sectionsTargetDoc, setSectionsTargetDoc] = useState('');
+  const [sectionsList, setSectionsList] = useState<SectionMeta[]>([]);
+  const [sectionsLoading, setSectionsLoading] = useState(false);
+  const [sectionsSearch, setSectionsSearch] = useState('');
 
   const validFileTypes = [
     'application/pdf',
@@ -123,9 +175,97 @@ const Index = () => {
         console.warn('Could not save chat to localStorage:', e);
       }
     }
-    // Auto-scroll to bottom of chat
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, uploadedFile]);
+
+  // ── Open Full Text Viewer ──────────────────────────────────────────────────
+  const openFullTextViewer = async (filename?: string) => {
+    const target = filename || uploadedFile?.name;
+    if (!target) return;
+
+    setViewerFilename(target);
+    setIsViewerOpen(true);
+    setViewerLoading(true);
+    setViewerSearch('');
+    setHasCopied(false);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/documents/${encodeURIComponent(target)}/content`);
+      if (res.ok) {
+        const data = await res.json();
+        setViewerContent(data.content || 'No text content found in document.');
+      } else {
+        setViewerContent('Failed to load document text from server.');
+      }
+    } catch (err) {
+      setViewerContent('Error connecting to backend to fetch document content.');
+    } finally {
+      setViewerLoading(false);
+    }
+  };
+
+  const copyFullText = () => {
+    if (!viewerContent) return;
+    navigator.clipboard.writeText(viewerContent);
+    setHasCopied(true);
+    toast.success('Document text copied to clipboard!');
+    setTimeout(() => setHasCopied(false), 2000);
+  };
+
+  const toggleSource = (msgId: string) => {
+    setExpandedSources(prev => ({ ...prev, [msgId]: !prev[msgId] }));
+  };
+
+  // ── Section Explorer & Viewer Helpers ─────────────────────────────────────
+  const openSectionsExplorer = async (filename: string) => {
+    setSectionsTargetDoc(filename);
+    setIsSectionsExplorerOpen(true);
+    setSectionsLoading(true);
+    setSectionsSearch('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/documents/${encodeURIComponent(filename)}/sections`);
+      if (res.ok) {
+        const data = await res.json();
+        setSectionsList(data.sections || []);
+      } else {
+        toast.error('Failed to load sections from backend');
+      }
+    } catch (e) {
+      toast.error('Network error loading document sections');
+    } finally {
+      setSectionsLoading(false);
+    }
+  };
+
+  const viewSectionDetail = async (sec: SectionMeta) => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/documents/${encodeURIComponent(sectionsTargetDoc)}/sections/${encodeURIComponent(sec.section_id)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setActiveSectionModal({
+          section_id: data.section_id,
+          section_title: data.section_title,
+          parent_title: data.parent_title,
+          page_range: data.page_start === data.page_end ? `Page ${data.page_start}` : `Pages ${data.page_start}–${data.page_end}`,
+          full_text: data.content
+        });
+      }
+    } catch (e) {
+      toast.error('Failed to load section content');
+    }
+  };
+
+  const copySectionText = async () => {
+    if (!activeSectionModal?.full_text) return;
+    try {
+      await navigator.clipboard.writeText(activeSectionModal.full_text);
+      setHasCopiedSection(true);
+      toast.success('Complete section text copied to clipboard!');
+      setTimeout(() => setHasCopiedSection(false), 2000);
+    } catch (e) {
+      toast.error('Could not copy to clipboard');
+    }
+  };
 
   // ── Switch to a previously uploaded document ──────────────────────────────
   const selectDocument = (doc: DocumentMeta) => {
@@ -139,7 +279,6 @@ const Index = () => {
     setIsChatEnabled(true);
     localStorage.setItem('docscan_active_doc', JSON.stringify(fileInfo));
 
-    // Restore chat history for this specific document
     const savedChat = localStorage.getItem(`docscan_chat_${doc.filename}`);
     if (savedChat) {
       try {
@@ -206,13 +345,11 @@ const Index = () => {
     setUploadedFile(fileInfo);
     setIsUploading(true);
 
-    // Save active document in localStorage
     localStorage.setItem('docscan_active_doc', JSON.stringify(fileInfo));
 
-    // Add loading message
     const loadingMessage: Message = {
       id: Date.now().toString(),
-      text: 'Uploading and processing your document...',
+      text: 'Uploading, extracting text, and generating RAG vector embeddings...',
       sender: 'bot',
       timestamp: new Date(),
       isLoading: true
@@ -228,7 +365,6 @@ const Index = () => {
         body: formData
       });
 
-      // Remove loading message
       setMessages(prev => prev.filter(msg => !msg.isLoading));
 
       if (response.ok) {
@@ -237,7 +373,7 @@ const Index = () => {
         const chunkInfo = result.chunk_count ? ` (${result.chunk_count} vector chunks indexed for RAG)` : '';
         const successMessage: Message = {
           id: Date.now().toString(),
-          text: `Document "${file.name}" has been uploaded and processed successfully${chunkInfo}. You can now ask questions!`,
+          text: `Document "${file.name}" has been uploaded and indexed successfully${chunkInfo}. You can now ask questions about it, or switch to 📜 Full Doc mode if you need whole-document analysis!`,
           sender: 'bot',
           timestamp: new Date()
         };
@@ -245,7 +381,7 @@ const Index = () => {
         
         setIsChatEnabled(true);
         toast.success('Document uploaded and indexed successfully!');
-        fetchDocuments(); // Refresh document list
+        fetchDocuments();
       } else {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || `Upload failed with server error ${response.status}`);
@@ -326,7 +462,7 @@ const Index = () => {
 
     const loadingMessage: Message = {
       id: (Date.now() + 1).toString(),
-      text: 'Thinking...',
+      text: modelTier === 'full' ? 'Analyzing entire document content...' : 'Searching vector index & thinking...',
       sender: 'bot',
       timestamp: new Date(),
       isLoading: true
@@ -334,6 +470,13 @@ const Index = () => {
     setMessages(prev => [...prev, loadingMessage]);
 
     try {
+      // Build context hint from recent messages to help section disambiguation
+      const recentContext = messages
+        .filter(m => m.sender === 'user' || (m.sender === 'bot' && m.matchedSection))
+        .slice(-3)
+        .map(m => m.sender === 'user' ? m.text : (m.matchedSection?.parent_title || ''))
+        .join(' ');
+
       const response = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: {
@@ -343,6 +486,7 @@ const Index = () => {
           message: message,
           filename: uploadedFile.name,
           model_tier: modelTier,
+          context_hint: recentContext,
         })
       });
 
@@ -355,7 +499,11 @@ const Index = () => {
           text: result.response,
           sender: 'bot',
           timestamp: new Date(),
-          modelUsed: result.model_used
+          modelUsed: result.model_used,
+          sources: result.sources || [],
+          fullDocUsed: result.full_doc_used || false,
+          retrievalMode: result.retrieval_mode,
+          matchedSection: result.matched_section || null,
         };
         setMessages(prev => [...prev, botMessage]);
       } else {
@@ -386,16 +534,34 @@ const Index = () => {
     }
   };
 
+  // Filtered viewer content based on search query
+  const filteredLines = viewerContent
+    ? viewerContent.split('\n').filter(line => 
+        !viewerSearch.trim() || line.toLowerCase().includes(viewerSearch.toLowerCase())
+      )
+    : [];
+
+  // Filtered sections in sections explorer
+  const filteredSections = sectionsList.filter(s => {
+    if (!sectionsSearch.trim()) return true;
+    const term = sectionsSearch.toLowerCase();
+    return (s.section_title && s.section_title.toLowerCase().includes(term)) ||
+           (s.parent_title && s.parent_title.toLowerCase().includes(term));
+  });
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
-        <Card className="mb-6">
+        <Card className="mb-6 shadow-sm border-blue-100">
           <CardHeader className="text-center py-4">
-            <CardTitle className="text-2xl font-bold text-gray-800">
+            <CardTitle className="text-2xl font-bold text-gray-800 flex items-center justify-center gap-2">
+              <Sparkles className="w-6 h-6 text-blue-600" />
               AI Document & Invoice Extraction Assistant
             </CardTitle>
-            <p className="text-sm text-gray-600">Upload documents, extract with OCR, and ask questions with local RAG</p>
+            <p className="text-sm text-gray-600">
+              Upload documents, extract with OCR, and ask questions with local RAG & Full-Document intelligence
+            </p>
           </CardHeader>
         </Card>
 
@@ -403,7 +569,7 @@ const Index = () => {
           {/* Left Column: Upload & Saved Documents */}
           <div className="space-y-6">
             {/* Upload Section */}
-            <Card>
+            <Card className="shadow-sm">
               <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg">
                   <Upload className="w-5 h-5 text-blue-600" />
@@ -438,10 +604,10 @@ const Index = () => {
                   </div>
                 ) : (
                   <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-start gap-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-start gap-3 min-w-0">
                         <CheckCircle2 className="w-5 h-5 text-green-600 mt-0.5 flex-shrink-0" />
-                        <div>
+                        <div className="min-w-0">
                           <p className="font-semibold text-green-900 text-sm break-all">
                             {uploadedFile.name}
                           </p>
@@ -450,7 +616,7 @@ const Index = () => {
                               Size: {formatFileSize(uploadedFile.size)} MB
                             </p>
                           )}
-                          <p className="text-[11px] text-green-600 mt-1">
+                          <p className="text-[11px] text-green-600 mt-0.5 font-medium">
                             Active Document (Chat enabled)
                           </p>
                           {isUploading && (
@@ -458,13 +624,28 @@ const Index = () => {
                               Processing & indexing...
                             </p>
                           )}
+
+                          {/* Quick Actions for Active Document */}
+                          <div className="flex items-center gap-2 mt-3">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openFullTextViewer()}
+                              className="h-7 text-xs bg-white text-blue-700 border-blue-300 hover:bg-blue-50 font-medium"
+                            >
+                              <Eye className="w-3.5 h-3.5 mr-1" />
+                              View Full Extracted Text
+                            </Button>
+                          </div>
                         </div>
                       </div>
+
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={removeFile}
-                        className="text-gray-500 hover:text-red-600"
+                        className="text-gray-500 hover:text-red-600 h-8 w-8 p-0"
                         disabled={isUploading}
                         title="Deselect document"
                       >
@@ -477,7 +658,7 @@ const Index = () => {
             </Card>
 
             {/* Previously Uploaded Documents */}
-            <Card>
+            <Card className="shadow-sm">
               <CardHeader className="pb-3 flex flex-row items-center justify-between">
                 <CardTitle className="flex items-center gap-2 text-base font-semibold text-gray-800">
                   <FolderOpen className="w-4 h-4 text-indigo-600" />
@@ -493,7 +674,7 @@ const Index = () => {
                     No documents uploaded yet. Upload one above!
                   </p>
                 ) : (
-                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                     {savedDocuments.map((doc) => {
                       const isActive = uploadedFile?.name === doc.filename;
                       return (
@@ -525,6 +706,32 @@ const Index = () => {
                           </div>
 
                           <div className="flex items-center gap-1.5 flex-shrink-0">
+                            {/* Quick Browse Sections */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openSectionsExplorer(doc.filename);
+                              }}
+                              className="p-1 text-gray-400 hover:text-indigo-600 rounded transition-colors"
+                              title="Browse structured sections & modules"
+                            >
+                              <BookOpen className="w-3.5 h-3.5" />
+                            </button>
+
+                            {/* Quick View Text */}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openFullTextViewer(doc.filename);
+                              }}
+                              className="p-1 text-gray-400 hover:text-blue-600 rounded transition-colors"
+                              title="Inspect full extracted text"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+
                             {isActive ? (
                               <span className="px-2 py-0.5 text-[10px] font-semibold text-blue-700 bg-blue-100 rounded-full">
                                 Active
@@ -538,6 +745,7 @@ const Index = () => {
                                 Chat
                               </Button>
                             )}
+
                             <button
                               type="button"
                               onClick={(e) => deleteDocument(doc.filename, e)}
@@ -557,21 +765,21 @@ const Index = () => {
           </div>
 
           {/* Right Column: Chat Section */}
-          <Card className="flex flex-col h-[580px]">
+          <Card className="flex flex-col h-[600px] shadow-sm">
             <CardHeader className="flex flex-row items-center justify-between pb-3 flex-shrink-0">
-              <div className="flex items-center gap-2">
-                <MessageCircle className="w-5 h-5 text-indigo-600" />
-                <CardTitle className="text-base font-semibold">
+              <div className="flex items-center gap-2 min-w-0">
+                <MessageCircle className="w-5 h-5 text-indigo-600 flex-shrink-0" />
+                <CardTitle className="text-base font-semibold truncate">
                   Ask Questions
                 </CardTitle>
                 {uploadedFile && (
-                  <span className="text-xs text-gray-500 truncate max-w-[150px]" title={uploadedFile.name}>
+                  <span className="text-xs text-gray-500 truncate max-w-[120px]" title={uploadedFile.name}>
                     ({uploadedFile.name})
                   </span>
                 )}
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 flex-shrink-0">
                 {/* Clear Chat Button */}
                 {uploadedFile && (
                   <Button
@@ -586,7 +794,7 @@ const Index = () => {
                   </Button>
                 )}
 
-                {/* Dual-Model Routing Selector */}
+                {/* Model & Analysis Mode Selector */}
                 <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg text-xs">
                   <button
                     type="button"
@@ -620,9 +828,21 @@ const Index = () => {
                         ? 'bg-white shadow text-purple-600 font-semibold'
                         : 'text-gray-600 hover:text-gray-900'
                     }`}
-                    title="Deep: Uses qwen2.5:3b for multi-page reasoning"
+                    title="Deep: Uses qwen2.5:3b for complex multi-page reasoning with RAG"
                   >
                     🎯 3B
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setModelTier('full')}
+                    className={`px-2 py-0.5 rounded-md font-medium text-[11px] transition-all ${
+                      modelTier === 'full'
+                        ? 'bg-amber-500 shadow text-white font-semibold'
+                        : 'text-amber-800 hover:bg-amber-100'
+                    }`}
+                    title="Full Doc: Ingests the entire extracted document text without chunking (use when you need complete section context or full summaries)"
+                  >
+                    📜 Full Doc
                   </button>
                 </div>
               </div>
@@ -644,13 +864,114 @@ const Index = () => {
                       <p className="font-semibold text-xs opacity-80">
                         {message.sender === 'user' ? 'You' : 'AI'}
                       </p>
-                      {message.modelUsed && (
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-50 text-blue-600 font-mono">
-                          {message.modelUsed}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1">
+                        {message.fullDocUsed && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200 font-medium">
+                            📜 Full Doc
+                          </span>
+                        )}
+                        {message.retrievalMode === 'full_section' && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
+                            📜 Mode B: Full Section
+                          </span>
+                        )}
+                        {message.retrievalMode === 'full_course' && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">
+                            📜 Mode B: Complete Syllabus
+                          </span>
+                        )}
+                        {message.retrievalMode === 'rag' && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-50 text-blue-700 border border-blue-200 font-medium">
+                            🎯 Mode A: RAG Chunks
+                          </span>
+                        )}
+                        {message.modelUsed && (
+                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-50 text-blue-600 font-mono">
+                            {message.modelUsed}
+                          </span>
+                        )}
+                      </div>
                     </div>
+                    
                     <p className="whitespace-pre-wrap leading-relaxed">{message.text}</p>
+
+                    {/* View Full Section Button (Available whenever a source section is identified) */}
+                    {message.matchedSection && (
+                      <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-1.5 text-xs text-gray-700 min-w-0">
+                          <span className="font-semibold text-indigo-700 truncate max-w-[220px]">
+                            📑 {message.matchedSection.section_title}
+                          </span>
+                          {message.matchedSection.page_range && (
+                            <span className="text-[10px] bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-200 font-mono font-medium flex-shrink-0">
+                              {message.matchedSection.page_range}
+                            </span>
+                          )}
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setActiveSectionModal(message.matchedSection!)}
+                          className="h-6 px-2 text-[11px] font-medium text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100 flex items-center gap-1 transition-colors"
+                        >
+                          <Eye className="w-3 h-3" />
+                          View Full Section
+                        </Button>
+                      </div>
+                    )}
+
+                    {/* Expandable Source Chunks (Available for RAG responses) */}
+                    {message.sources && message.sources.length > 0 && (
+                      <div className="mt-2.5 pt-2 border-t border-gray-100">
+                        <button
+                          type="button"
+                          onClick={() => toggleSource(message.id)}
+                          className="text-[11px] font-medium text-blue-600 hover:text-blue-800 flex items-center gap-1 transition-colors"
+                        >
+                          <FileSearch className="w-3.5 h-3.5" />
+                          {expandedSources[message.id] ? (
+                            <>
+                              Hide retrieved context ({message.sources.length} chunks)
+                              <ChevronUp className="w-3 h-3 ml-0.5" />
+                            </>
+                          ) : (
+                            <>
+                              View retrieved context ({message.sources.length} chunks used)
+                              <ChevronDown className="w-3 h-3 ml-0.5" />
+                            </>
+                          )}
+                        </button>
+
+                        {expandedSources[message.id] && (
+                          <div className="mt-2 space-y-2 text-left">
+                            {message.sources.map((chunk, idx) => (
+                              <div 
+                                key={idx} 
+                                className="bg-gray-50 border border-gray-200 rounded p-2 text-xs font-mono text-gray-700 whitespace-pre-wrap leading-normal"
+                              >
+                                <span className="font-bold text-[10px] text-blue-700 block mb-1">
+                                  Context Chunk #{idx + 1}
+                                </span>
+                                {chunk}
+                              </div>
+                            ))}
+                            <div className="flex items-center justify-between text-[11px] text-gray-500 pt-1">
+                              <span>Need the complete section surrounding this?</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setModelTier('full');
+                                  toast.info('Switched to 📜 Full Doc mode. Ask your question again to query with the entire document!');
+                                }}
+                                className="text-amber-700 hover:underline font-semibold ml-2"
+                              >
+                                Switch to 📜 Full Doc mode →
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
                 <div ref={messagesEndRef} />
@@ -664,7 +985,9 @@ const Index = () => {
                   onKeyPress={handleKeyPress}
                   placeholder={
                     isChatEnabled
-                      ? `Ask a question about ${uploadedFile?.name}...`
+                      ? modelTier === 'full'
+                        ? `Ask anything using the entire document text...`
+                        : `Ask a question about ${uploadedFile?.name}...`
                       : 'Upload or select a document first...'
                   }
                   disabled={!isChatEnabled || isUploading}
@@ -674,7 +997,7 @@ const Index = () => {
                   onClick={sendMessage}
                   disabled={!isChatEnabled || !messageInput.trim() || isUploading}
                   size="sm"
-                  className="px-4"
+                  className={`px-4 ${modelTier === 'full' ? 'bg-amber-600 hover:bg-amber-700' : ''}`}
                 >
                   <Send className="w-4 h-4" />
                 </Button>
@@ -683,6 +1006,263 @@ const Index = () => {
           </Card>
         </div>
       </div>
+
+      {/* ── Full Document Extracted Text Viewer Modal ──────────────────────── */}
+      <Dialog open={isViewerOpen} onOpenChange={setIsViewerOpen}>
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col p-6">
+          <DialogHeader className="pb-3 border-b flex flex-row items-center justify-between">
+            <div className="min-w-0 pr-4">
+              <DialogTitle className="text-lg font-bold flex items-center gap-2 text-gray-900 truncate">
+                <FileText className="w-5 h-5 text-blue-600 flex-shrink-0" />
+                Full Extracted Text: {viewerFilename}
+              </DialogTitle>
+              <p className="text-xs text-gray-500 mt-1">
+                {viewerContent.length} characters extracted via PyMuPDF / PaddleOCR
+              </p>
+            </div>
+            
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={copyFullText}
+                className="h-8 text-xs flex items-center gap-1.5"
+                disabled={viewerLoading || !viewerContent}
+              >
+                {hasCopied ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-green-600" />
+                    Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy Text
+                  </>
+                )}
+              </Button>
+            </div>
+          </DialogHeader>
+
+          {/* Search bar inside text viewer */}
+          <div className="py-2 flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-gray-400" />
+              <Input
+                value={viewerSearch}
+                onChange={(e) => setViewerSearch(e.target.value)}
+                placeholder="Search word or phrase inside extracted text..."
+                className="pl-9 h-9 text-xs"
+              />
+            </div>
+            {viewerSearch && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setViewerSearch('')}
+                className="h-9 px-2 text-xs text-gray-500"
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+
+          {/* Full Text Content Area */}
+          <div className="flex-1 overflow-y-auto bg-gray-50 p-4 rounded-lg border border-gray-200 font-mono text-xs leading-relaxed text-gray-800 whitespace-pre-wrap select-text">
+            {viewerLoading ? (
+              <p className="text-center py-10 text-gray-500 animate-pulse font-sans">
+                Loading extracted text from database...
+              </p>
+            ) : viewerSearch.trim() ? (
+              filteredLines.length > 0 ? (
+                filteredLines.map((line, i) => (
+                  <div key={i} className="py-0.5 hover:bg-yellow-100 rounded px-1">
+                    {line}
+                  </div>
+                ))
+              ) : (
+                <p className="text-gray-500 italic py-4 font-sans text-center">
+                  No matching text found for "{viewerSearch}".
+                </p>
+              )
+            ) : (
+              viewerContent || <p className="text-gray-400 italic">No text extracted.</p>
+            )}
+          </div>
+
+          {/* Modal Footer */}
+          <div className="pt-3 border-t flex items-center justify-between text-xs text-gray-500">
+            <span>
+              💡 Tip: If RAG missed a detail, switch to <strong className="text-amber-800">📜 Full Doc</strong> mode in chat.
+            </span>
+            <Button
+              size="sm"
+              onClick={() => {
+                setIsViewerOpen(false);
+                setModelTier('full');
+                toast.info('Switched to 📜 Full Doc mode! You can now ask questions about the entire document.');
+              }}
+              className="bg-amber-600 hover:bg-amber-700 text-white h-8 text-xs font-medium"
+            >
+              Analyze in 📜 Full Doc Mode
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 2. Full Section Viewer Dialog (Dedicated Source Text Viewer) ──── */}
+      <Dialog open={!!activeSectionModal} onOpenChange={(open) => !open && setActiveSectionModal(null)}>
+        <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col bg-white">
+          <DialogHeader className="border-b pb-3">
+            <div className="flex items-start justify-between pr-6">
+              <div>
+                <DialogTitle className="text-base font-bold text-gray-900 flex items-center gap-2">
+                  <span className="text-indigo-600">📑</span> {activeSectionModal?.section_title}
+                </DialogTitle>
+                <div className="flex items-center gap-2 text-xs text-gray-500 mt-1">
+                  {activeSectionModal?.parent_title && (
+                    <span className="font-medium text-gray-700 truncate max-w-[360px]">{activeSectionModal.parent_title}</span>
+                  )}
+                  {activeSectionModal?.page_range && (
+                    <>
+                      <span>•</span>
+                      <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded text-[11px] font-mono font-semibold">
+                        {activeSectionModal.page_range}
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={copySectionText}
+                className="text-xs h-8 flex items-center gap-1.5 flex-shrink-0"
+              >
+                {hasCopiedSection ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-green-600" />
+                    Copied Section
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy Full Section
+                  </>
+                )}
+              </Button>
+            </div>
+          </DialogHeader>
+
+          {/* Section Original Extracted Content */}
+          <div className="flex-1 overflow-y-auto bg-gray-50 p-4 rounded-lg border border-gray-200 font-mono text-xs leading-relaxed text-gray-800 whitespace-pre-wrap select-text">
+            {activeSectionModal?.full_text || 'No section text available.'}
+          </div>
+
+          {/* Section Modal Footer */}
+          <div className="pt-2 border-t flex items-center justify-between text-xs text-gray-500">
+            <span>
+              ✅ Complete extracted source section (un-truncated original text).
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setActiveSectionModal(null)}
+              className="text-xs h-7 text-gray-600 hover:text-gray-900"
+            >
+              Return to Chat
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 3. Structured Sections Explorer Dialog ────────────────────────── */}
+      <Dialog open={isSectionsExplorerOpen} onOpenChange={setIsSectionsExplorerOpen}>
+        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col bg-white">
+          <DialogHeader className="border-b pb-3">
+            <div className="flex items-center justify-between pr-6">
+              <div>
+                <DialogTitle className="text-base font-bold text-gray-900 flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-indigo-600" />
+                  Structured Sections & Modules
+                </DialogTitle>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Document: <span className="font-semibold text-gray-700">{sectionsTargetDoc}</span> ({sectionsList.length} sections detected)
+                </p>
+              </div>
+            </div>
+          </DialogHeader>
+
+          {/* Search Filter */}
+          <div className="py-2 flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-2.5 top-2.5 text-gray-400" />
+              <Input
+                value={sectionsSearch}
+                onChange={(e) => setSectionsSearch(e.target.value)}
+                placeholder="Filter by section title, module number, or course name..."
+                className="pl-9 h-9 text-xs"
+              />
+            </div>
+            {sectionsSearch && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSectionsSearch('')}
+                className="h-9 px-2 text-xs text-gray-500"
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+
+          {/* Sections List */}
+          <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
+            {sectionsLoading ? (
+              <p className="text-center py-10 text-gray-500 animate-pulse text-xs">
+                Loading structured sections...
+              </p>
+            ) : filteredSections.length === 0 ? (
+              <p className="text-gray-500 italic py-6 text-center text-xs">
+                No sections match "{sectionsSearch}".
+              </p>
+            ) : (
+              filteredSections.map((sec) => (
+                <div
+                  key={sec.section_id}
+                  className="p-2.5 rounded-lg border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/30 transition-all flex items-center justify-between gap-3 text-xs"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-gray-900 truncate">
+                        {sec.section_title}
+                      </span>
+                      <span className="px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono text-[10px] flex-shrink-0 font-medium">
+                        {sec.page_start === sec.page_end ? `Page ${sec.page_start}` : `Pages ${sec.page_start}–${sec.page_end}`}
+                      </span>
+                    </div>
+                    {sec.parent_title && (
+                      <p className="text-[11px] text-gray-500 truncate mt-0.5">
+                        {sec.parent_title}
+                      </p>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => viewSectionDetail(sec)}
+                    className="h-7 text-xs text-indigo-700 bg-white hover:bg-indigo-50 border-indigo-200 flex items-center gap-1 flex-shrink-0"
+                  >
+                    <Eye className="w-3 h-3" />
+                    View Text
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

@@ -10,12 +10,14 @@ except ImportError:
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
+import re
 import sqlite3
 import threading
 from datetime import datetime
 from file_processor import FileProcessor
 from AI_service import AIService
 from rag_engine import RAGEngine
+from section_manager import SectionManager
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -33,9 +35,10 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # ── Initialize services (singletons — shared across all Gunicorn workers) ─────
 print("⏳ Initializing DocScan backend services...")
-file_processor = FileProcessor(UPLOAD_FOLDER)
-ai_service     = AIService()
-rag_engine     = RAGEngine()          # Local ChromaDB + sentence-transformers
+file_processor  = FileProcessor(UPLOAD_FOLDER)
+ai_service      = AIService()
+rag_engine      = RAGEngine()          # Local ChromaDB + sentence-transformers
+section_manager = SectionManager(DATABASE) # Section-aware parser and retrieval
 print("✅ All backend services ready!")
 
 # ── Optimized SQLite: thread-local connections + WAL mode ─────────────────────
@@ -108,7 +111,7 @@ def upload_file():
         print(f"\n📥 [UPLOAD] Incoming upload request for file: '{filename}'")
 
         # Step 1: Text extraction
-        print(f"⚙️ [UPLOAD] Step 1/3: Extracting text from '{filename}'...")
+        print(f"⚙️ [UPLOAD] Step 1/4: Extracting text from '{filename}'...")
         result = file_processor.process_file(file)
 
         if not result['success']:
@@ -120,13 +123,19 @@ def upload_file():
         doc_id  = filename
         print(f"📄 [UPLOAD] Step 1 complete. Extracted {len(content)} characters.")
 
-        # Step 2: Index into ChromaDB (RAG)
-        print(f"🧠 [UPLOAD] Step 2/3: Chunking and indexing into ChromaDB (RAG)...")
-        chunk_count = rag_engine.index_document(doc_id, content)
-        print(f"✅ [UPLOAD] Step 2 complete. Indexed {chunk_count} chunk(s).")
+        # Step 2: Parse and preserve structured sections & module boundaries
+        print(f"📑 [UPLOAD] Step 2/4: Parsing document sections and module boundaries...")
+        sections = section_manager.parse_document_sections(result['filepath'], filename)
+        section_manager.save_sections(filename, sections)
+        print(f"✅ [UPLOAD] Step 2 complete. Discovered {len(sections)} structured section(s).")
 
-        # Step 3: Persist metadata in SQLite
-        print(f"💾 [UPLOAD] Step 3/3: Saving document metadata to SQLite...")
+        # Step 3: Index into ChromaDB (Section-aware RAG)
+        print(f"🧠 [UPLOAD] Step 3/4: Chunking and indexing into ChromaDB (RAG)...")
+        chunk_count = rag_engine.index_document(doc_id, content, sections=sections)
+        print(f"✅ [UPLOAD] Step 3 complete. Indexed {chunk_count} chunk(s).")
+
+        # Step 4: Persist metadata in SQLite
+        print(f"💾 [UPLOAD] Step 4/4: Saving document metadata to SQLite...")
         conn = get_db()
         conn.execute(
             '''INSERT INTO documents (filename, filepath, content, chunk_count)
@@ -134,12 +143,13 @@ def upload_file():
             (filename, result['filepath'], content, chunk_count)
         )
         conn.commit()
-        print(f"🎉 [UPLOAD] Successfully processed and indexed '{filename}'!\n")
+        print(f"🎉 [UPLOAD] Successfully processed, structured, and indexed '{filename}'!\n")
 
         return jsonify({
-            'message': f"Document '{filename}' uploaded and indexed successfully.",
+            'message': f"Document '{filename}' uploaded, structured, and indexed successfully.",
             'filename': filename,
             'chunk_count': chunk_count,
+            'section_count': len(sections),
             'rag_enabled': chunk_count > 0,
             'characters_extracted': len(content)
         }), 200
@@ -154,35 +164,93 @@ def upload_file():
 @app.route('/chat', methods=['POST'])
 def chat():
     """
-    Handle chat messages using RAG-powered retrieval.
-
-    Flow:
-      1. Embed the user's question
-      2. Retrieve top-K semantically relevant chunks from ChromaDB
-      3. Send only those chunks to the LLM (not the full document)
-      4. Return the answer
+    Handle chat messages with Dual-Mode Intelligence:
+      Mode A: Semantic RAG retrieval for focused queries
+      Mode B: Full Section / Complete Syllabus retrieval for comprehensive requests
     """
     try:
         data = request.get_json()
         print("📨 Incoming chat request:", data)
 
-        message    = data.get('message')
-        filename   = data.get('filename')
-        model_tier = data.get('model_tier') or data.get('tier', 'auto')
+        message      = data.get('message')
+        filename     = data.get('filename')
+        model_tier   = data.get('model_tier') or data.get('tier', 'auto')
+        context_hint = data.get('context_hint', '')
 
         if not message or not filename:
             return jsonify({'error': 'Message and filename required'}), 400
 
         doc_id = filename
 
-        # Step 1 & 2: RAG retrieval — semantic search over document chunks
-        rag_chunks = []
+        # ── Step 1: Intelligent Query Classifier (Full Section Resolution) ────
+        # Checks if user asked for complete module, full syllabus, or entire section
+        section_res = section_manager.resolve_query_section(filename, message, context_hint=context_hint)
+
+        if section_res.get('is_full_request'):
+            print(f"📜 [CHAT] Mode B Triggered: Full Section Retrieval ({section_res['mode']}) -> '{section_res['section_title']}' ({section_res.get('page_range')})")
+            response, model_used = ai_service.get_response(
+                question=message,
+                document_content=section_res['full_text'],
+                filename=filename,
+                rag_chunks=None,
+                model_tier='full',
+            )
+
+            return jsonify({
+                'response': response,
+                'retrieval_mode': section_res['mode'],
+                'chunks_used': 0,
+                'rag_enabled': False,
+                'full_section_used': True,
+                'model_used': model_used,
+                'model_tier': model_tier,
+                'matched_section': {
+                    'section_id': section_res.get('matched_section_id', ''),
+                    'section_title': section_res['section_title'],
+                    'parent_title': section_res.get('parent_title', ''),
+                    'page_range': section_res.get('page_range', ''),
+                    'full_text': section_res['full_text']
+                },
+                'sources': []
+            })
+
+        # ── Step 2: Explicit Full Document Mode (user clicked '📜 Full Doc') ───
+        if model_tier in ['full', 'fulldoc']:
+            print(f"📜 [CHAT] Explicit Full Document Mode for: '{filename}'")
+            conn = get_db()
+            row = conn.execute(
+                'SELECT content FROM documents WHERE filename = ? ORDER BY upload_time DESC LIMIT 1',
+                (filename,)
+            ).fetchone()
+            if not row:
+                return jsonify({'error': f"Document '{filename}' not found"}), 404
+
+            full_content = row[0] or ""
+            response, model_used = ai_service.get_response(
+                question=message,
+                document_content=full_content,
+                filename=filename,
+                rag_chunks=None,
+                model_tier='full',
+            )
+
+            return jsonify({
+                'response': response,
+                'retrieval_mode': 'full_document',
+                'chunks_used': 0,
+                'rag_enabled': False,
+                'full_doc_used': True,
+                'model_used': model_used,
+                'model_tier': 'full',
+                'sources': [],
+            })
+
+        # ── Step 3: Mode A: Semantic RAG retrieval over document chunks ───────
+        rag_items = []
         if rag_engine.document_indexed(doc_id):
-            rag_chunks = rag_engine.retrieve(doc_id, message)
-            print(f"📚 RAG: retrieved {len(rag_chunks)} chunks for query: '{message}'")
+            rag_items = rag_engine.retrieve_with_metadata(doc_id, message, top_k=5)
+            print(f"📚 RAG: retrieved {len(rag_items)} chunks for query: '{message}'")
         else:
-            # Fallback: load full text from SQLite and use keyword chunking
-            print(f"⚠️  No RAG index for '{doc_id}', falling back to keyword search")
             conn = get_db()
             row = conn.execute(
                 'SELECT content FROM documents WHERE filename = ? ORDER BY upload_time DESC LIMIT 1',
@@ -191,15 +259,58 @@ def chat():
             if not row:
                 return jsonify({'error': 'Document not found'}), 404
 
-            # Re-index on-the-fly so next query will use RAG
             content = row[0]
-            rag_engine.index_document(doc_id, content)
-            rag_chunks = rag_engine.retrieve(doc_id, message)
+            sections = section_manager.parse_document_sections(os.path.join(UPLOAD_FOLDER, filename), filename)
+            section_manager.save_sections(filename, sections)
+            rag_engine.index_document(doc_id, content, sections=sections)
+            rag_items = rag_engine.retrieve_with_metadata(doc_id, message, top_k=5)
 
-        # Step 3: Get AI response with retrieved chunks and adaptive model routing
+        rag_chunks = [item['text'] for item in rag_items]
+
+        # Determine best matching section from retrieved chunks by scoring title & parent relevance
+        matched_section_info = None
+        if rag_items:
+            best_sec = None
+            best_score = -1
+            query_context = f"{message} {context_hint}".lower()
+            query_words = [w for w in re.split(r'[^a-zA-Z0-9]+', query_context) if len(w) > 3]
+
+            for item in rag_items:
+                sec = None
+                sec_id = item.get('section_id')
+                if sec_id:
+                    sec = section_manager.get_section_by_id(filename, sec_id)
+                if not sec and item.get('text'):
+                    sec = section_manager.find_section_for_chunk(filename, item['text'])
+
+                if sec:
+                    # Score by word overlap with query & context hint
+                    sec_title = f"{sec['section_title']} {sec.get('parent_title', '')}".lower()
+                    score = sum(3 for w in query_words if w in sec_title)
+                    if score > best_score:
+                        best_score = score
+                        best_sec = sec
+
+            if not best_sec and rag_items:
+                # Fallback to first chunk's section
+                if rag_items[0].get('section_id'):
+                    best_sec = section_manager.get_section_by_id(filename, rag_items[0]['section_id'])
+                elif rag_items[0].get('text'):
+                    best_sec = section_manager.find_section_for_chunk(filename, rag_items[0]['text'])
+
+            if best_sec:
+                matched_section_info = {
+                    'section_id': best_sec['section_id'],
+                    'section_title': best_sec['section_title'],
+                    'parent_title': best_sec.get('parent_title', ''),
+                    'page_range': f"Page {best_sec['page_start']}" if best_sec['page_start'] == best_sec['page_end'] else f"Pages {best_sec['page_start']}–{best_sec['page_end']}",
+                    'full_text': best_sec['content']
+                }
+
+        # Query LLM with RAG chunks
         response, model_used = ai_service.get_response(
             question=message,
-            document_content="",   # Not needed — RAG chunks are used
+            document_content="",
             filename=filename,
             rag_chunks=rag_chunks,
             model_tier=model_tier,
@@ -207,10 +318,14 @@ def chat():
 
         return jsonify({
             'response': response,
+            'retrieval_mode': 'rag',
             'chunks_used': len(rag_chunks),
             'rag_enabled': True,
+            'full_doc_used': False,
             'model_used': model_used,
             'model_tier': model_tier,
+            'matched_section': matched_section_info,
+            'sources': rag_chunks,
         })
 
     except Exception as e:
@@ -251,6 +366,7 @@ def delete_document(filename):
     try:
         conn = get_db()
         conn.execute('DELETE FROM documents WHERE filename = ?', (filename,))
+        conn.execute('DELETE FROM document_sections WHERE document_id = ?', (filename,))
         conn.commit()
 
         # Delete from ChromaDB vector collection
@@ -268,6 +384,59 @@ def delete_document(filename):
         return jsonify({'message': f"Document '{filename}' deleted successfully"}), 200
     except Exception as e:
         print(f"❌ Delete error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/documents/<path:filename>/content', methods=['GET'])
+def get_document_content(filename):
+    """Fetch full extracted text and metadata for a document"""
+    try:
+        conn = get_db()
+        row = conn.execute(
+            'SELECT content, chunk_count, upload_time FROM documents WHERE filename = ? ORDER BY upload_time DESC LIMIT 1',
+            (filename,)
+        ).fetchone()
+        if not row:
+            return jsonify({'error': f"Document '{filename}' not found"}), 404
+
+        content = row[0] or ''
+        return jsonify({
+            'filename': filename,
+            'content': content,
+            'chunk_count': row[1] or 0,
+            'upload_time': row[2],
+            'character_count': len(content)
+        }), 200
+    except Exception as e:
+        print(f"❌ Get content error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/documents/<path:filename>/sections', methods=['GET'])
+def get_document_sections(filename):
+    """Fetch structured sections and page ranges for a document"""
+    try:
+        sections = section_manager.get_sections(filename)
+        return jsonify({
+            'filename': filename,
+            'total_sections': len(sections),
+            'sections': sections
+        }), 200
+    except Exception as e:
+        print(f"❌ Get sections error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/documents/<path:filename>/sections/<path:section_id>', methods=['GET'])
+def get_document_section_by_id(filename, section_id):
+    """Fetch complete un-truncated content of a specific section"""
+    try:
+        section = section_manager.get_section_by_id(filename, section_id)
+        if not section:
+            return jsonify({'error': f"Section '{section_id}' not found for document '{filename}'"}), 404
+        return jsonify(section), 200
+    except Exception as e:
+        print(f"❌ Get section by id error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
